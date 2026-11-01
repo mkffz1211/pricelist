@@ -397,7 +397,10 @@ def parse_listings(html):
     soup = BeautifulSoup(html, "html.parser")
     listings = []
 
-    for card in soup.select('div[data-testid="ticket"]'):
+    # Each listing has a price element with data-testid="ticket-card-price".
+    # Use its enclosing ticket card for section/row/badges when available.
+    for price_el in soup.select('[data-testid="ticket-card-price"]'):
+        card = price_el.find_parent(attrs={"data-testid": "ticket"}) or price_el.parent
         section_el = card.select_one('[data-ab-test="section"]')
         section = section_el.get_text(strip=True) if section_el else ""
 
@@ -407,15 +410,18 @@ def parse_listings(html):
         allocation_el = card.select_one('[data-ab-test="allocation"]')
         allocation = allocation_el.get_text(strip=True) if allocation_el else ""
 
-        price_container = card.select_one('[data-ab-test="price-per-ticket"]')
-        price_raw = ""
-        if price_container:
-            price_div = price_container.find("div")
-            if price_div:
-                price_raw = price_div.get_text(strip=True)
+        price_span = price_el.select_one("span.ltg-text-price") or price_el.select_one("span")
+        price_raw = price_span.get_text(strip=True) if price_span else price_el.get_text(strip=True)
 
-        currency = "GBP" if "£" in price_raw else ("AED" if "AED" in price_raw else "")
-        price = "".join(c for c in price_raw if c.isdigit() or c == ".")
+        if "£" in price_raw or "GBP" in price_raw.upper():
+            currency = "GBP"
+        elif "AED" in price_raw:
+            currency = "AED"
+        elif "SAR" in price_raw:
+            currency = "SAR"
+        else:
+            currency = ""
+        price = re.sub(r"[^\d.]", "", price_raw.replace(",", ""))
 
         restriction_els = card.select('[data-ab-test="restriction"]')
         restrictions = [r.get_text(strip=True) for r in restriction_els]
@@ -875,7 +881,10 @@ def _cache_key(home_team, fixture_url, qty, seated_together):
 def get_cached_raw_prices(home_team, fixture_url, qty, seated_together):
     key = _cache_key(home_team, fixture_url, qty, seated_together)
     if session.get("raw_prices_key") == key and "raw_prices" in session:
-        return {int(k): tuple(v) for k, v in session["raw_prices"].items()}
+        cached = {int(k): tuple(v) for k, v in session["raw_prices"].items()}
+        # Ignore caches where every price is empty (a failed earlier fetch)
+        if any(amount is not None for amount, _ in cached.values()):
+            return cached
     return None
 
 
