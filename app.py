@@ -77,6 +77,7 @@ HOME_TEAMS = [
     "Tottenham Hotspur",
     "Manchester United",
     "Manchester City",
+    "Real Madrid",
 ]
 
 # Fixtures that have already been played. Each entry is (home, away).
@@ -117,7 +118,12 @@ def league_cfg():
     return LEAGUES[get_league()]
 
 
-app.jinja_env.globals["league_home_teams"] = lambda: league_cfg()["home_teams"]
+app.jinja_env.globals["league_home_teams"] = lambda: HOME_TEAMS
+
+
+def is_cl_fixture(home_team, away_team):
+    """True if this home/away pair is a Champions League fixture."""
+    return any(a == away_team for _, a in CHAMPIONS_LEAGUE_HOME_FIXTURES.get(home_team, []))
 
 # Some team names don't slugify cleanly.
 SLUG_OVERRIDES = {
@@ -338,13 +344,12 @@ def away_teams_for(home_team):
         return []
     today = datetime.date.today()
     excluded = {away for h, away in PLAYED_FIXTURES if h == home_team}
-    if get_league() == "champions_league":
-        fixtures = sorted(CHAMPIONS_LEAGUE_HOME_FIXTURES.get(home_team, []), key=lambda f: f[0])
-    else:
-        try:
-            fixtures = fetch_livescore_fixtures(home_team)
-        except requests.RequestException:
-            return []
+    try:
+        fixtures = list(fetch_livescore_fixtures(home_team))
+    except requests.RequestException:
+        fixtures = []
+    fixtures += CHAMPIONS_LEAGUE_HOME_FIXTURES.get(home_team, [])
+    fixtures.sort(key=lambda f: f[0])
     names = []
     for match_date, away in fixtures:
         if match_date < today or away in excluded or away in names:
@@ -848,7 +853,7 @@ def render_league_bar():
 
 
 def render_currency_bar(selected_currency):
-    return render_league_bar() + (
+    return (
         CURRENCY_BAR
         .replace("{gbp_active}", CUR_ACTIVE if selected_currency == "GBP" else CUR_INACTIVE)
         .replace("{aed_active}", CUR_ACTIVE if selected_currency == "AED" else CUR_INACTIVE)
@@ -1027,7 +1032,8 @@ def resolve_fixture(home_team, away_team, custom_url):
     if custom_url:
         return custom_url, None
     elif home_team and away_team:
-        fixture_url = find_fixture_url(home_team, away_team, league_cfg()["url_suffix"])
+        suffix = LEAGUES["champions_league" if is_cl_fixture(home_team, away_team) else "premier_league"]["url_suffix"]
+        fixture_url = find_fixture_url(home_team, away_team, suffix)
         if not fixture_url:
             return None, (
                 f"Could not find a matching fixture page for {home_team} vs {away_team} "
