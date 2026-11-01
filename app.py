@@ -232,6 +232,7 @@ CHAMPIONS_LEAGUE_HOME_FIXTURES = {
     "Arsenal": [
         (datetime.date(2026, 11, 24), "Borussia Dortmund"),
         (datetime.date(2026, 12, 9), "Real Madrid"),
+        (datetime.date(2027, 1, 27), "Sabah"),
     ],
     "Liverpool": [
         (datetime.date(2026, 10, 20), "Villarreal"),
@@ -252,9 +253,17 @@ CHAMPIONS_LEAGUE_HOME_FIXTURES = {
         (datetime.date(2026, 10, 21), "Leipzig"),
         (datetime.date(2026, 11, 24), "PSV Eindhoven"),
     ],
-    # Chelsea and Tottenham home fixtures not yet confirmed from source data.
+    # Chelsea: no league-phase home fixtures confirmed yet.
     "Chelsea": [],
-    "Tottenham Hotspur": [],
+    # Tottenham: opponents found on UEFA's club page, dates NOT confirmed yet
+    # (date None = shown after dated matches). Fill in real dates when verified.
+    "Tottenham Hotspur": [
+        (None, "Atlético de Madrid"),
+        (None, "Borussia Dortmund"),
+        (None, "Slavia Praha"),
+        (None, "Copenhagen"),
+        (None, "Villarreal"),
+    ],
 }
 
 
@@ -353,10 +362,10 @@ def away_teams_for(home_team):
         AWAY_ERRORS[home_team] = f"Could not load LiveScore fixtures: {e}"
         fixtures = []
     fixtures += CHAMPIONS_LEAGUE_HOME_FIXTURES.get(home_team, [])
-    fixtures.sort(key=lambda f: f[0])
+    fixtures.sort(key=lambda f: (f[0] is None, f[0] or datetime.date.max))
     names = []
     for match_date, away in fixtures:
-        if match_date < today or away in excluded or away in names:
+        if (match_date and match_date < today) or away in excluded or away in names:
             continue
         names.append(away)
     return names
@@ -1143,17 +1152,6 @@ def away_options():
     except Exception as e:
         print(f"[away-options] error for {home}: {e}")
         return jsonify([]), 200
-
-
-@app.route("/set-league", methods=["POST"])
-def set_league():
-    """Switch league. Clears the saved search and cached prices."""
-    league = request.form.get("league", "").strip()
-    if league in LEAGUES:
-        session.clear()
-        session["league"] = league
-        session["currency"] = BASE_CURRENCY
-    return redirect(request.referrer or "/pricelist")
 
 
 @app.route("/reset", methods=["POST"])
