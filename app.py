@@ -232,7 +232,7 @@ CHAMPIONS_LEAGUE_HOME_FIXTURES = {
     "Arsenal": [
         (datetime.date(2026, 11, 24), "Borussia Dortmund"),
         (datetime.date(2026, 12, 9), "Real Madrid"),
-        (datetime.date(2027, 1, 27), "Sabah"),
+        (datetime.date(2027, 1, 27), "Sabah KF"),
     ],
     "Liverpool": [
         (datetime.date(2026, 10, 20), "Villarreal"),
