@@ -87,9 +87,37 @@ PLAYED_FIXTURES = {
 DEFAULT_QTY = "2"
 DEFAULT_SEATED_TOGETHER = True
 
-URL_SUFFIX = "english-premier-league"
 BASE_DOMAIN = "https://www.livefootballtickets.com/us/fixtures/"
-TEAM_PAGE_BASE = "https://www.livefootballtickets.com/us/premier-league/"
+
+# Leagues shown in the top bar. Each has its own fixture URL suffix and its
+# own team page (used to read the club's home fixtures).
+LEAGUES = {
+    "premier_league": {
+        "label": "🏴 Premier League",
+        "url_suffix": "english-premier-league",
+        "team_page_base": "https://www.livefootballtickets.com/us/premier-league/",
+        "home_teams": HOME_TEAMS,
+    },
+    "champions_league": {
+        "label": "🏆 Champions League",
+        "url_suffix": "champions-league",
+        "team_page_base": "https://www.livefootballtickets.com/us/champions-league/",
+        "home_teams": HOME_TEAMS + ["Real Madrid"],
+    },
+}
+DEFAULT_LEAGUE = "premier_league"
+
+
+def get_league():
+    league = session.get("league", DEFAULT_LEAGUE)
+    return league if league in LEAGUES else DEFAULT_LEAGUE
+
+
+def league_cfg():
+    return LEAGUES[get_league()]
+
+
+app.jinja_env.globals["league_home_teams"] = lambda: league_cfg()["home_teams"]
 
 # Some team names don't slugify cleanly.
 SLUG_OVERRIDES = {
@@ -156,48 +184,138 @@ def find_fixture_url(home_team, away_team, url_suffix):
 # Only fixtures where the club is the HOME side are kept.
 # ---------------------------------------------------------------------------
 
-_HOME_AWAY_CACHE = {}
-_HOME_AWAY_LOCK = threading.Lock()
+LIVESCORE_TEAM_URLS = {
+    "Arsenal": "https://www.livescore.com/en/football/team/arsenal/2773/fixtures/",
+    "Manchester City": "https://www.livescore.com/en/football/team/man-city/12633/fixtures/",
+    "Manchester United": "https://www.livescore.com/en/football/team/manchester-united/2810/fixtures/",
+    "Liverpool": "https://www.livescore.com/en/football/team/liverpool/3340/fixtures/",
+    "Chelsea": "https://www.livescore.com/en/football/team/chelsea/2881/fixtures/",
+    "Tottenham Hotspur": "https://www.livescore.com/en/football/team/tottenham-hotspur/3339/fixtures/",
+}
+
+# livescore spells some clubs differently from our team list
+LIVESCORE_NAME_ALIASES = {
+    "Man City": "Manchester City",
+    "Man Utd": "Manchester United",
+    "Man United": "Manchester United",
+    "Spurs": "Tottenham Hotspur",
+    "Tottenham": "Tottenham Hotspur",
+    "Brighton & Hove Albion": "Brighton and Hove Albion",
+    "Brighton": "Brighton and Hove Albion",
+    "Newcastle": "Newcastle United",
+    "Nottingham": "Nottingham Forest",
+    "Nott'm Forest": "Nottingham Forest",
+    "Leeds": "Leeds United",
+    "Ipswich": "Ipswich Town",
+    "Atletico Madrid": "Atlético de Madrid",
+    "Atlético Madrid": "Atlético de Madrid",
+    "Inter": "Inter Milan",
+    "Bayern München": "Bayern Munich",
+    "Paris SG": "Paris Saint-Germain",
+    "PSG": "Paris Saint-Germain",
+}
+
+_LIVESCORE_CACHE = {}
+_LIVESCORE_LOCK = threading.Lock()
 
 
-def fetch_home_away_teams(home_team):
-    """Return the list of away teams that `home_team` plays at home."""
-    with _HOME_AWAY_LOCK:
-        if home_team in _HOME_AWAY_CACHE:
-            return _HOME_AWAY_CACHE[home_team]
+def _norm(name):
+    return strip_accents(name or "").lower().replace(".", "").strip()
 
-    page_url = f"{TEAM_PAGE_BASE}{team_slug(home_team)}-tickets.html"
+
+def canonical_team(name):
+    name = (name or "").strip()
+    return LIVESCORE_NAME_ALIASES.get(name, name)
+
+
+def _walk_events(node, out):
+    """Recursively collect (home_name, away_name, start) for every match-like dict."""
+    if isinstance(node, dict):
+        home = node.get("homeTeam")
+        away = node.get("awayTeam")
+        if isinstance(home, dict) and isinstance(away, dict):
+            start = node.get("startTimestamp") or node.get("startDate") or node.get("timestamp")
+            out.append((home.get("name", ""), away.get("name", ""), start))
+        for v in node.values():
+            _walk_events(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _walk_events(v, out)
+
+
+def _to_date(value):
+    """Accepts a unix timestamp (seconds) or an ISO date string."""
+    if value is None or value == "":
+        return None
     try:
-        resp = http.get(page_url, timeout=15)
-        resp.raise_for_status()
-    except requests.RequestException:
-        # Fallback: every other team (not cached, so it retries next time)
-        return [t for t in TEAMS if t != home_team]
+        if isinstance(value, (int, float)) or str(value).isdigit():
+            return datetime.datetime.fromtimestamp(int(value)).date()
+        return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
+    except (ValueError, OSError, OverflowError):
+        return None
 
-    # Matches /fixtures/<HOME>-v(s)-<AWAY>-tickets-english-premier-league
-    # where <HOME> is the selected team, so only home fixtures are captured.
-    pattern = re.compile(
-        r"/fixtures/" + re.escape(team_slug(home_team))
-        + r"-vs?-([a-z0-9-]+?)-tickets-" + re.escape(URL_SUFFIX)
-    )
-    away_slugs = []
-    for slug in pattern.findall(resp.text):
-        if slug != team_slug(home_team) and slug not in away_slugs:
-            away_slugs.append(slug)
 
-    away_teams = sorted(slug_to_name(s) for s in away_slugs)
+def fetch_livescore_fixtures(home_team):
+    """Return [(date, away_team)] for every fixture where home_team is the HOME side, sorted by date."""
+    url = LIVESCORE_TEAM_URLS.get(home_team)
+    if not url:
+        return []
+    with _LIVESCORE_LOCK:
+        if home_team in _LIVESCORE_CACHE:
+            return _LIVESCORE_CACHE[home_team]
 
-    with _HOME_AWAY_LOCK:
-        _HOME_AWAY_CACHE[home_team] = away_teams
-    return away_teams
+    resp = http.get(url, timeout=15)
+    resp.raise_for_status()
+
+    events = []
+    soup = BeautifulSoup(resp.text, "html.parser")
+    script = soup.find("script", id="__NEXT_DATA__")
+    if script and script.string:
+        try:
+            _walk_events(json.loads(script.string), events)
+        except json.JSONDecodeError:
+            pass
+
+    home_key = _norm(home_team)
+    fixtures = []
+    seen = set()
+    for home_name, away_name, start in events:
+        if _norm(canonical_team(home_name)) != home_key:
+            continue
+        match_date = _to_date(start)
+        away = canonical_team(away_name)
+        if not match_date or not away:
+            continue
+        key = (match_date, _norm(away))
+        if key in seen:
+            continue
+        seen.add(key)
+        fixtures.append((match_date, away))
+
+    fixtures.sort(key=lambda f: f[0])
+    if fixtures:
+        with _LIVESCORE_LOCK:
+            _LIVESCORE_CACHE[home_team] = fixtures
+    return fixtures
 
 
 def away_teams_for(home_team):
-    """Away options for a home team, minus fixtures already played."""
+    """Upcoming away opponents for a home team, in date order.
+    Matches dated before today are dropped automatically."""
     if not home_team:
         return []
+    today = datetime.date.today()
     excluded = {away for h, away in PLAYED_FIXTURES if h == home_team}
-    return [t for t in fetch_home_away_teams(home_team) if t not in excluded]
+    try:
+        fixtures = fetch_livescore_fixtures(home_team)
+    except requests.RequestException:
+        return []
+    names = []
+    for match_date, away in fixtures:
+        if match_date < today or away in excluded or away in names:
+            continue
+        names.append(away)
+    return names
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +384,14 @@ TEAM_CATEGORY_MAPS = {
         ("A",    [151], None),
         ("A+",   None, ("A", 1.3)),
         ("VIP+", [154, 155], None),
+    ],
+    "Real Madrid": [
+        ("D",    [12715], None),
+        ("D+",   [13576, 12713], None),
+        ("C",    [12711], None),
+        ("B",    [12716], None),
+        ("A",    [12710], None),
+        ("A+",   [12712, 13575], None),
     ],
 }
 
@@ -338,6 +464,16 @@ TEAM_STAND_NAMES = {
         2240: "Vermillion Off Site Hospitality",
         127: "VIP Longside",
         126: "VIP Shortside",
+    },
+    "Real Madrid": {
+        12710: "Category 1",
+        12716: "Category 1 Alta",
+        12712: "Category 1 Premium",
+        13575: "Category 1 Premium Lower",
+        12713: "Category 2 Fondo",
+        13576: "Category 2 Fondo Lower",
+        12711: "Category 2 Lateral",
+        12715: "Category 3",
     },
     "Liverpool": {
         49: "Anfield Road Lower",
@@ -654,8 +790,30 @@ CURRENCY_BAR = """
 """
 
 
+LEAGUE_ACTIVE = "bg-emerald-500 text-white shadow-lg shadow-emerald-500/25"
+LEAGUE_INACTIVE = "bg-[#12171f] text-gray-400 border border-[#232b38] hover:text-gray-200 hover:bg-[#1a212c]"
+
+
+def render_league_bar():
+    current = get_league()
+    buttons = ""
+    for key, cfg in LEAGUES.items():
+        active = LEAGUE_ACTIVE if key == current else LEAGUE_INACTIVE
+        buttons += f'''
+    <form method="POST" action="/set-league">
+      <input type="hidden" name="league" value="{key}">
+      <button type="submit" class="{active} tap w-full py-3.5 rounded-xl text-sm font-bold transition">{cfg["label"]}</button>
+    </form>'''
+    return f'''
+<div class="max-w-3xl mx-auto px-4 pt-5">
+  <div class="grid grid-cols-2 gap-2">{buttons}
+  </div>
+</div>
+'''
+
+
 def render_currency_bar(selected_currency):
-    return (
+    return render_league_bar() + (
         CURRENCY_BAR
         .replace("{gbp_active}", CUR_ACTIVE if selected_currency == "GBP" else CUR_INACTIVE)
         .replace("{aed_active}", CUR_ACTIVE if selected_currency == "AED" else CUR_INACTIVE)
@@ -721,7 +879,7 @@ TEAM_SELECT_FIELDS = """
     <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Home Team 🏠</label>
     <select name="home_team" required onchange="filterAway(this.value)" class="w-full bg-[#0e131b] border border-[#2a3441] text-gray-100 rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition">
       <option value="">Pick a home team</option>
-      {% for team in home_teams %}
+      {% for team in league_home_teams() %}
         <option value="{{ team }}" {% if team == home_team %}selected{% endif %}>{{ team }}</option>
       {% endfor %}
     </select>
@@ -834,7 +992,7 @@ def resolve_fixture(home_team, away_team, custom_url):
     if custom_url:
         return custom_url, None
     elif home_team and away_team:
-        fixture_url = find_fixture_url(home_team, away_team, URL_SUFFIX)
+        fixture_url = find_fixture_url(home_team, away_team, league_cfg()["url_suffix"])
         if not fixture_url:
             return None, (
                 f"Could not find a matching fixture page for {home_team} vs {away_team} "
@@ -905,7 +1063,7 @@ def get_or_fetch_raw_prices(home_team, fixture_url, qty, seated_together, catego
 
 
 def get_or_resolve_fixture(home_team, away_team, custom_url):
-    key = f"{home_team}|{away_team}|{custom_url}"
+    key = f"{get_league()}|{home_team}|{away_team}|{custom_url}"
     if session.get("fixture_resolve_key") == key and "fixture_resolve_url" in session:
         return session["fixture_resolve_url"], session.get("fixture_resolve_error")
 
@@ -928,9 +1086,23 @@ def away_options():
     return jsonify(away_teams_for(home))
 
 
+@app.route("/set-league", methods=["POST"])
+def set_league():
+    """Switch league. Clears the saved search and cached prices."""
+    league = request.form.get("league", "").strip()
+    if league in LEAGUES:
+        session.clear()
+        session["league"] = league
+        session["currency"] = BASE_CURRENCY
+    return redirect(request.referrer or "/pricelist")
+
+
 @app.route("/reset", methods=["POST"])
 def reset():
+    league = session.get("league")
     session.clear()
+    if league:
+        session["league"] = league
     return redirect(request.referrer or "/pricelist")
 
 
