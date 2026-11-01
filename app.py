@@ -223,6 +223,7 @@ LIVESCORE_NAME_ALIASES = {
 
 _LIVESCORE_CACHE = {}
 _LIVESCORE_LOCK = threading.Lock()
+AWAY_ERRORS = {}
 
 # Champions League 2026/27 league-phase HOME fixtures, from UEFA's published schedule.
 # Matchdays 3-6 are included. Matchday 7-8 (Jan 2027) and any playoff/knockout
@@ -342,11 +343,14 @@ def away_teams_for(home_team):
     Matches dated before today are dropped automatically."""
     if not home_team:
         return []
+    AWAY_ERRORS.pop(home_team, None)
     today = datetime.date.today()
     excluded = {away for h, away in PLAYED_FIXTURES if h == home_team}
     try:
         fixtures = list(fetch_livescore_fixtures(home_team))
-    except requests.RequestException:
+    except Exception as e:
+        print(f"[away list] LiveScore failed for {home_team}: {e}")
+        AWAY_ERRORS[home_team] = f"Could not load LiveScore fixtures: {e}"
         fixtures = []
     fixtures += CHAMPIONS_LEAGUE_HOME_FIXTURES.get(home_team, [])
     fixtures.sort(key=lambda f: f[0])
@@ -951,13 +955,23 @@ TEAM_SELECT_FIELDS = """
     sel.disabled = true;
     try {
       const r = await fetch('/away-options?home=' + encodeURIComponent(home));
+      if (!r.ok) throw new Error('server error ' + r.status);
       const teams = await r.json();
+      if (!teams.length) {
+        const o = document.createElement('option');
+        o.value = ''; o.textContent = 'No upcoming home fixtures found';
+        o.disabled = true; sel.appendChild(o);
+      }
       teams.forEach(t => {
         const o = document.createElement('option');
         o.value = t;
         o.textContent = t;
         sel.appendChild(o);
       });
+    } catch (err) {
+      const o = document.createElement('option');
+      o.value = ''; o.textContent = '⚠ ' + err.message;
+      sel.appendChild(o);
     } finally {
       sel.disabled = false;
     }
@@ -1124,7 +1138,11 @@ def home():
 def away_options():
     """JSON list of away teams for a home team (home fixtures only)."""
     home = request.args.get("home", "").strip()
-    return jsonify(away_teams_for(home))
+    try:
+        return jsonify(away_teams_for(home))
+    except Exception as e:
+        print(f"[away-options] error for {home}: {e}")
+        return jsonify([]), 200
 
 
 @app.route("/set-league", methods=["POST"])
