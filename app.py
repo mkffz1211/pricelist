@@ -84,8 +84,24 @@ PLAYED_FIXTURES = {
     ("Arsenal", "Coventry City"),
 }
 
-DEFAULT_QTY = "2"
-DEFAULT_SEATED_TOGETHER = True
+# Seats Arrangements: each mode maps to its own URL parameters.
+# Singles: no qty and no seatedTogether. Pairs and Trios: seatedTogether=true.
+SEAT_MODES = {
+    "singles": {"label": "Singles", "qty": None, "seated": False},
+    "pairs": {"label": "Pairs", "qty": "2", "seated": True},
+    "singles_pairs": {"label": "Singles & Pairs", "qty": "2", "seated": True},
+    "trios": {"label": "Trios", "qty": "3", "seated": True},
+}
+DEFAULT_SEAT_MODE = "pairs"
+
+SINGLES_HDR = "الاسعار للشخص الواحد فرديات"
+PAIRS_HDR = "الاسعار للشخص و اقصاها اثنين متجاورة"
+TRIOS_HDR = "الاسعار للشخص الواحد و اقصاها ثلاث متجاورة"
+
+
+def get_seat_mode():
+    mode = session.get("seat_mode", DEFAULT_SEAT_MODE)
+    return mode if mode in SEAT_MODES else DEFAULT_SEAT_MODE
 
 BASE_DOMAIN = "https://www.livefootballtickets.com/us/fixtures/"
 
@@ -1052,13 +1068,24 @@ def render_league_bar():
 '''
 
 
-def render_currency_bar(selected_currency):
-    return (
-        CURRENCY_BAR
-        .replace("{gbp_active}", CUR_ACTIVE if selected_currency == "GBP" else CUR_INACTIVE)
-        .replace("{aed_active}", CUR_ACTIVE if selected_currency == "AED" else CUR_INACTIVE)
-        .replace("{sar_active}", CUR_ACTIVE if selected_currency == "SAR" else CUR_INACTIVE)
-    )
+def render_currency_bar(selected_currency=None):
+    """Seats Arrangements selector (Singles / Pairs / Singles & Pairs / Trios)."""
+    current = get_seat_mode()
+    buttons = ""
+    for key, cfg in SEAT_MODES.items():
+        active = CUR_ACTIVE if key == current else CUR_INACTIVE
+        buttons += f'''
+    <form method="POST" action="/set-seat-mode">
+      <input type="hidden" name="mode" value="{key}">
+      <button type="submit" class="{active} tap px-3.5 py-1.5 rounded-full text-xs font-semibold transition">{cfg["label"]}</button>
+    </form>'''
+    return f'''
+<div class="max-w-3xl mx-auto px-4 pt-3">
+  <div class="flex flex-wrap items-center gap-2">
+    <span class="text-[11px] text-gray-500 font-semibold uppercase tracking-wide mr-1">Seats Arrangements</span>{buttons}
+  </div>
+</div>
+'''
 
 
 def apply_currency_to_results(results, currency):
@@ -1258,8 +1285,9 @@ def resolve_form(form):
     home_team = form.get("home_team", "").strip()
     away_team = form.get("away_team", "").strip()
     custom_url = form.get("custom_url", "").strip()
-    qty = DEFAULT_QTY
-    seated_together = DEFAULT_SEATED_TOGETHER
+    cfg = SEAT_MODES[get_seat_mode()]
+    qty = cfg["qty"]
+    seated_together = cfg["seated"]
 
     fixture_url, fixture_error = get_or_resolve_fixture(home_team, away_team, custom_url)
     return home_team, away_team, custom_url, qty, seated_together, fixture_url, fixture_error
@@ -1278,8 +1306,8 @@ def load_last_query():
         "home_team": session.get("home_team", ""),
         "away_team": session.get("away_team", ""),
         "custom_url": session.get("custom_url", ""),
-        "qty": session.get("qty", DEFAULT_QTY),
-        "seated_together": session.get("seated_together", DEFAULT_SEATED_TOGETHER),
+        "qty": SEAT_MODES[get_seat_mode()]["qty"],
+        "seated_together": SEAT_MODES[get_seat_mode()]["seated"],
     }
 
 
@@ -1354,13 +1382,12 @@ def get_currency():
     return session.get("currency", BASE_CURRENCY)
 
 
-@app.route("/set-currency", methods=["POST"])
-def set_currency():
-    """Switch the display currency (GBP / AED / SAR). Never touches the network."""
-    valid_currencies = {BASE_CURRENCY, "AED", "SAR"}
-    currency = request.form.get("currency", "").strip().upper()
-    if currency in valid_currencies:
-        session["currency"] = currency
+@app.route("/set-seat-mode", methods=["POST"])
+def set_seat_mode():
+    """Switch seat arrangement (Singles / Pairs / Singles & Pairs / Trios). Never touches the network."""
+    mode = request.form.get("mode", "").strip()
+    if mode in SEAT_MODES:
+        session["seat_mode"] = mode
     return redirect(request.referrer or "/pricelist")
 
 
@@ -1660,6 +1687,7 @@ def message():
     fixture_error = None
     current_time = datetime.datetime.now().strftime("%H:%M")
     display_currency = get_currency()
+    mode = get_seat_mode()
 
     if request.method == "POST":
         home_team, away_team, custom_url, qty, seated_together, fixture_url, fixture_error = resolve_form(request.form)
@@ -1714,6 +1742,18 @@ def message():
                         set_cached_raw_prices(home_team, fixture_url, qty, seated_together, raw_prices)
 
                 final = derive_price_list(raw_prices, category_map)
+                if mode == "singles_pairs":
+                    singles_final = derive_price_list(
+                        get_or_fetch_raw_prices(home_team, fixture_url, None, False, category_map),
+                        category_map,
+                    )
+                    blocks = [(PAIRS_HDR, final), (SINGLES_HDR, singles_final)]
+                elif mode == "singles":
+                    blocks = [(SINGLES_HDR, final)]
+                elif mode == "trios":
+                    blocks = [(TRIOS_HDR, final)]
+                else:
+                    blocks = [(PAIRS_HDR, final)]
 
                 lines = []
                 lines.append(f"{home_team} vs {away_team}")
@@ -1723,26 +1763,28 @@ def message():
                 if match_date:
                     lines.append(f"🗓️ {match_date}")
                 lines.append("")
-                lines.append("الاسعار للشخص الواحد و اقصاها اثنين متجاورة")
-                lines.append("")
-
                 rate = 1 if display_currency == BASE_CURRENCY else OTHER_RATE
 
-                for label, amount, orig_currency in final:
-                    if amount is not None:
-                        marked_up = amount * 1.3
-                        rounded = floor_round_5(marked_up)
-                        converted = rounded * rate
-                    else:
-                        converted = None
+                for i, (hdr, block_items) in enumerate(blocks):
+                    if i:
+                        lines.append("")
+                    lines.append(hdr)
+                    lines.append("")
+                    for label, amount, orig_currency in block_items:
+                        if amount is not None:
+                            marked_up = amount * 1.3
+                            rounded = floor_round_5(marked_up)
+                            converted = rounded * rate
+                        else:
+                            converted = None
 
-                    if converted is None:
-                        price_str = "N/A"
-                    elif display_currency == BASE_CURRENCY:
-                        price_str = f"{BASE_SYMBOL}{converted:g}"
-                    else:
-                        price_str = f"{converted:g} {display_currency}"
-                    lines.append(f"{label} {price_str}")
+                        if converted is None:
+                            price_str = "N/A"
+                        elif display_currency == BASE_CURRENCY:
+                            price_str = f"{BASE_SYMBOL}{converted:g}"
+                        else:
+                            price_str = f"{converted:g} {display_currency}"
+                        lines.append(f"{label} {price_str}")
                 lines.append("")
                 lines.append("⚠️ جميع الاسعار قابلة للتغير ب اي وقت")
                 lines.append("❌ التذاكر غير قابلة للاسترجاع")
