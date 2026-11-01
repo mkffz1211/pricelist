@@ -931,30 +931,26 @@ def derive_stand_price_list(raw_prices, home_team):
 
 
 def parse_fixture_meta(html):
-    """Extract match date and stadium name from a fixture page."""
+    """Extract match date and stadium name from the match summary."""
     soup = BeautifulSoup(html, "html.parser")
-    date_text = ""
+    date_el = soup.select_one('[data-testid="match-summary-date"]')
+    venue_el = soup.select_one('[data-testid="match-summary-venue"]')
+    date_text = date_el.get_text(" ", strip=True) if date_el else ""
     stadium = ""
-
-    for div in soup.select("div.text-ltg-grey-1.font-normal"):
-        text = div.get_text(strip=True)
-        link = div.find("a")
-        if link and not stadium:
+    if venue_el:
+        link = venue_el.find("a")
+        if link:
             stadium = link.get_text(strip=True)
-        elif not link and not date_text and any(day in text for day in WEEKDAYS):
-            date_text = text
-
     return date_text, stadium
 
 
 def format_date_ddmmyyyy(date_text):
-    """'Friday, August 21, 2026 at 08:00 PM' -> '21/08/2026'."""
+    """'Sat · Dec 05, 2026 · 12:30 PM' -> '05/12/2026'."""
     if not date_text:
         return ""
     try:
-        date_part = date_text.split(" at ")[0]
-        date_part = date_part.split(", ", 1)[1]
-        dt = datetime.datetime.strptime(date_part, "%B %d, %Y")
+        parts = [p.strip() for p in date_text.split("·")]
+        dt = datetime.datetime.strptime(parts[1], "%b %d, %Y")
         return dt.strftime("%d/%m/%Y")
     except (IndexError, ValueError):
         return date_text
@@ -1694,7 +1690,7 @@ def message():
             try:
                 category_map = TEAM_CATEGORY_MAPS[home_team]
 
-                meta_cached = session.get("meta_fixture_url") == fixture_url and "meta_stadium" in session
+                meta_cached = session.get("meta_fixture_url") == fixture_url and bool(session.get("meta_stadium"))
                 cached_prices = get_cached_raw_prices(home_team, fixture_url, qty, seated_together)
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -1723,11 +1719,11 @@ def message():
                 lines.append(f"{home_team} vs {away_team}")
                 lines.append("")
                 if stadium:
-                    lines.append(stadium)
+                    lines.append(f"🏟️ {stadium}")
                 if match_date:
-                    lines.append(match_date)
+                    lines.append(f"🗓️ {match_date}")
                 lines.append("")
-                lines.append("جميع الاسعار للشخص الواحد و اقصاها اثنين متجاورة")
+                lines.append("الاسعار للشخص الواحد و اقصاها اثنين متجاورة")
                 lines.append("")
 
                 rate = 1 if display_currency == BASE_CURRENCY else OTHER_RATE
@@ -1748,9 +1744,13 @@ def message():
                         price_str = f"{converted:g} {display_currency}"
                     lines.append(f"{label} {price_str}")
                 lines.append("")
-                lines.append("جميع الاسعار قابلة للتغيير ب اي وقت")
+                lines.append("⚠️ جميع الاسعار قابلة للتغير ب اي وقت")
+                lines.append("❌ التذاكر غير قابلة للاسترجاع")
+                lines.append("✉️ التذاكر توصل في يوم المباراة او قبلها")
                 lines.append("")
-                lines.append("التقسيط ب تابي للارقام الاماراتية")
+                lines.append("متوفر تابي للارقام الاماراتية والسعودية 🇸🇦🇦🇪")
+                lines.append("")
+                lines.append("Whatsapp: +971 50 363 8936")
 
                 message_text = "\n".join(lines)
 
