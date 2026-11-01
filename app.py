@@ -23,14 +23,13 @@ import unicodedata
 import datetime
 import secrets
 import concurrent.futures
-import json
 
 app = Flask(__name__)
 # A NEW random secret key every time the server starts. Flask session cookies
 # are stored in your browser, not the server -- so without this, restarting
-# the app would still show your last search because the browser's old cookie
-# would still be valid. Generating a fresh key each run invalidates any old
-# cookie, so the app always starts blank.
+# the app would still show your last search (e.g. "Arsenal vs Coventry")
+# because the browser's old cookie would still be valid. Generating a fresh
+# key each run invalidates any old cookie, so the app always starts blank.
 app.secret_key = secrets.token_hex(32)
 
 HEADERS = {
@@ -77,57 +76,33 @@ HOME_TEAMS = [
     "Manchester City",
 ]
 
-CHAMPIONS_LEAGUE_HOME_TEAMS = [
-    "Arsenal",
-    "Chelsea",
-    "Liverpool",
-    "Tottenham Hotspur",
-    "Manchester United",
-    "Manchester City",
-    "Real Madrid",
-]
-
-# Premier League clubs plus European opponents. Confirm this list against the
-# 2026-27 Champions League participants before using it.
-CHAMPIONS_LEAGUE_AWAY_TEAMS = TEAMS + [
-    "Borussia Dortmund",
+LA_LIGA_HOME_TEAMS = [
     "Real Madrid",
     "FC Barcelona",
-    "Atlético de Madrid",
-    "Bayern Munich",
-    "Paris Saint-Germain",
-    "Inter Milan",
-    "Juventus",
-    "AC Milan",
-    "Napoli",
-    "Bayer Leverkusen",
-    "RB Leipzig",
-    "Benfica",
-    "Sporting CP",
-    "PSV",
-    "Porto",
-    "Club Brugge",
-    "Galatasaray",
-    "Monaco",
-    "Marseille",
 ]
 
-# Fixtures that have already been played. Each entry is (home, away).
-# Add more here when a match is over, and it disappears from the away dropdown.
-PLAYED_FIXTURES = {
-    ("Arsenal", "Coventry City"),
-}
-
-
-def played_map_json():
-    """Return {home_team: [away teams already played]} as JSON for the page script."""
-    m = {}
-    for home, away in PLAYED_FIXTURES:
-        m.setdefault(home, []).append(away)
-    return json.dumps(m)
-
-
-app.jinja_env.globals["played_map_json"] = played_map_json
+LA_LIGA_AWAY_TEAMS = [
+    "AlavÃ©s",
+    "Athletic Club",
+    "AtlÃ©tico de Madrid",
+    "FC Barcelona",
+    "Celta Vigo",
+    "Deportivo La CoruÃ±a",
+    "Elche",
+    "Espanyol",
+    "Getafe",
+    "Levante",
+    "MÃ¡laga",
+    "Osasuna",
+    "Racing Santander",
+    "Rayo Vallecano",
+    "Real Betis",
+    "Real Madrid",
+    "Real Sociedad",
+    "Sevilla",
+    "Valencia",
+    "Villarreal",
+]
 
 # Quantity and "seated together" are no longer user-editable -- every search
 # always uses these fixed values.
@@ -141,16 +116,14 @@ DEFAULT_SEATED_TOGETHER = True
 BASE_DOMAIN = "https://www.livefootballtickets.com/us/fixtures/"
 
 # Some team names don't slugify cleanly. Confirmed against the live site
-# where possible (Atlético de Madrid, Athletic Club, Levante); the rest use
-# best-effort accent-stripped slugs -- if any turn out wrong, send me the
-# correct slug and I'll add it here.
+# where possible (AtlÃ©tico de Madrid, Athletic Club, Levante); the rest of
+# the Spanish teams use best-effort accent-stripped slugs -- if any of
+# those turn out wrong, tell me the correct slug and I'll add it here.
 SLUG_OVERRIDES = {
     "Brighton and Hove Albion": "brighton-hove-albion",
-    "Atlético de Madrid": "atletico-madrid",
+    "AtlÃ©tico de Madrid": "atletico-madrid",
     "Athletic Club": "athletic-de-bilbao",
     "Levante": "levante-ud",
-    "Inter Milan": "inter-milan",
-    "Bayern Munich": "bayern-munich",
 }
 
 
@@ -177,8 +150,9 @@ def build_fixture_url_with_connector(home_team, away_team, connector, url_suffix
 
 def find_fixture_url(home_team, away_team, url_suffix):
     """
-    Check both '-v-' and '-vs-' fixture URLs IN PARALLEL and return whichever
-    works, preferring '-v-' if both do. Returns None if neither resolves.
+    Check both '-v-' and '-vs-' fixture URLs IN PARALLEL (instead of trying
+    one, waiting, then trying the other) and return whichever works,
+    preferring '-v-' if both do. Returns None if neither resolves.
     """
     candidates = {
         connector: build_fixture_url_with_connector(home_team, away_team, connector, url_suffix)
@@ -205,7 +179,10 @@ def find_fixture_url(home_team, away_team, url_suffix):
 # ---------------------------------------------------------------------------
 # League definitions -- the single source of truth for which home/away
 # teams show up, which URL suffix to use, and which currency is "base"
-# for that league.
+# for that league (GBP for Premier League, EUR for La Liga). Note: the
+# site's currency dropdown is client-side only and doesn't change what our
+# scraper reads (verified), so "EUR" for La Liga means the same scraped
+# number, just labeled EUR instead of GBP -- see apply_currency_to_results.
 # ---------------------------------------------------------------------------
 
 LEAGUES = {
@@ -215,24 +192,24 @@ LEAGUES = {
         "away_teams": TEAMS,
         "url_suffix": "english-premier-league",
         "base_currency": "GBP",
-        "base_symbol": "£",
+        "base_symbol": "Â£",
         "other_rate": 5,
     },
-    "champions_league": {
-        "label": "Champions League",
-        "home_teams": CHAMPIONS_LEAGUE_HOME_TEAMS,
-        "away_teams": CHAMPIONS_LEAGUE_AWAY_TEAMS,
-        "url_suffix": "champions-league",
-        "base_currency": "GBP",
-        "base_symbol": "£",
-        "other_rate": 5,
+    "la_liga": {
+        "label": "La Liga",
+        "home_teams": LA_LIGA_HOME_TEAMS,
+        "away_teams": LA_LIGA_AWAY_TEAMS,
+        "url_suffix": "spanish-la-liga",
+        "base_currency": "EUR",
+        "base_symbol": "â‚¬",
+        "other_rate": 4.2,
     },
 }
 
 DEFAULT_LEAGUE = "premier_league"
 
 # ---------------------------------------------------------------------------
-# Category maps — ONE PER HOME TEAM (each stadium has different stand IDs)
+# Category maps â€” ONE PER HOME TEAM (each stadium has different stand IDs)
 #
 # Format per row: (label, [category_ids] OR None, formula OR None)
 #   - [category_ids]: fetch each ID, take the cheapest non-junior price across all of them
@@ -472,7 +449,7 @@ def parse_listings(html):
             if price_div:
                 price_raw = price_div.get_text(strip=True)
 
-        currency = "GBP" if "£" in price_raw else ("AED" if "AED" in price_raw else "")
+        currency = "GBP" if "Â£" in price_raw else ("AED" if "AED" in price_raw else "")
         price = "".join(c for c in price_raw if c.isdigit() or c == ".")
 
         restriction_els = card.select('[data-ab-test="restriction"]')
@@ -530,11 +507,17 @@ def get_cheapest_price(base_url, qty, seated_together, category_ids):
 def fetch_raw_prices(fixture_url, qty, seated_together, category_map):
     """
     Fetch the price for every UNIQUE category ID referenced anywhere in a
-    team's category map -- one network request per ID, all in parallel.
+    team's category map -- exactly ONE network request per ID, regardless
+    of how many D/C/B/A labels or stand-list rows reuse that ID.
+
+    All requests fire IN PARALLEL (thread pool) instead of one-at-a-time,
+    since each category ID is an independent HTTP request -- this is the
+    main speed win for a search with 10+ stands.
 
     Returns {category_id: (amount, currency)}. This is the single source
-    of truth all three tabs derive from -- see derive_* functions below,
-    which are pure local computation with zero network calls.
+    of truth all three tabs (Full Price List, Base Price, Customer Message
+    Final) derive from -- see derive_* functions below, which are pure
+    local computation with zero network calls.
     """
     ids = set()
     for label, cat_ids, formula in category_map:
@@ -562,7 +545,7 @@ def fetch_raw_prices(fixture_url, qty, seated_together, category_map):
 
 def derive_price_list(raw_prices, category_map):
     """Given cached raw prices, resolve every D/C/B/A label to a final
-    price -- no network calls. Used by Base Price and Customer Message."""
+    price -- no network calls. Used by Base Price and Customer Message Final."""
     label_prices = {}
     for label, cat_ids, formula in category_map:
         if cat_ids is not None:
@@ -698,6 +681,10 @@ BASE_STYLE = """
 </style>
 """
 
+# AED/SAR are a straight multiplier on top of the league's own base
+# currency (GBP for Premier League, EUR for La Liga) -- see LEAGUES above
+# for the actual rate per league.
+
 NAV_ACTIVE = "bg-emerald-500 text-white shadow-md shadow-emerald-500/25"
 NAV_INACTIVE = "bg-[#141a23] text-gray-400 border border-[#232b38] hover:text-gray-200 hover:bg-[#1a212c]"
 
@@ -712,11 +699,11 @@ LEAGUE_BAR = """
   <div class="grid grid-cols-2 gap-2">
     <form method="POST" action="/set-league">
       <input type="hidden" name="league" value="premier_league">
-      <button type="submit" class="{pl_active} tap w-full py-3.5 rounded-xl text-sm font-bold transition">🏴 Premier League</button>
+      <button type="submit" class="{pl_active} tap w-full py-3.5 rounded-xl text-sm font-bold transition">ðŸ´ Premier League</button>
     </form>
     <form method="POST" action="/set-league">
-      <input type="hidden" name="league" value="champions_league">
-      <button type="submit" class="{cl_active} tap w-full py-3.5 rounded-xl text-sm font-bold transition">🏆 Champions League</button>
+      <input type="hidden" name="league" value="la_liga">
+      <button type="submit" class="{laliga_active} tap w-full py-3.5 rounded-xl text-sm font-bold transition">ðŸ‡ªðŸ‡¸ La Liga</button>
     </form>
   </div>
 </div>
@@ -727,7 +714,7 @@ def render_league_bar(selected_league):
     return (
         LEAGUE_BAR
         .replace("{pl_active}", LEAGUE_ACTIVE if selected_league == "premier_league" else LEAGUE_INACTIVE)
-        .replace("{cl_active}", LEAGUE_ACTIVE if selected_league == "champions_league" else LEAGUE_INACTIVE)
+        .replace("{laliga_active}", LEAGUE_ACTIVE if selected_league == "la_liga" else LEAGUE_INACTIVE)
     )
 
 
@@ -765,7 +752,8 @@ def render_currency_bar(selected_currency, league_key):
 
 def apply_currency_to_results(results, currency, league_key):
     """Convert a list of {price, currency, ...} dicts in place to the
-    selected display currency (league base price x rate)."""
+    selected display currency (league base price x rate). Used by Full
+    Price List and Base Price, which both share this shape."""
     league = LEAGUES[league_key]
     rate = 1 if currency == league["base_currency"] else league["other_rate"]
     for r in results:
@@ -778,12 +766,12 @@ def apply_currency_to_results(results, currency, league_key):
 NAV = """
 <div class="max-w-3xl mx-auto px-4 pt-3">
   <div class="flex flex-wrap items-center gap-2">
-    <a href="/pricelist" class="{price_active} tap px-4 py-2.5 rounded-full text-sm font-semibold transition">📋 Prices</a>
-    <a href="/baseprice" class="{baseprice_active} tap px-4 py-2.5 rounded-full text-sm font-semibold transition">💰 Base</a>
-    <a href="/message" class="{message_active} tap px-4 py-2.5 rounded-full text-sm font-semibold transition">💬 Message</a>
+    <a href="/pricelist" class="{price_active} tap px-4 py-2.5 rounded-full text-sm font-semibold transition">ðŸ“‹ Prices</a>
+    <a href="/baseprice" class="{baseprice_active} tap px-4 py-2.5 rounded-full text-sm font-semibold transition">ðŸ’° Base</a>
+    <a href="/message" class="{message_active} tap px-4 py-2.5 rounded-full text-sm font-semibold transition">ðŸ’¬ Message</a>
     <form method="POST" action="/reset" class="ml-auto">
       <button type="submit" class="tap px-4 py-2.5 rounded-full text-sm font-semibold transition bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30">
-        ↺ Reset
+        â†º Reset
       </button>
     </form>
   </div>
@@ -792,7 +780,7 @@ NAV = """
 <div id="loadingOverlay" class="fixed inset-0 z-50 hidden items-center justify-center bg-[#0b0f14]/80 backdrop-blur-sm">
   <div class="flex flex-col items-center gap-4 px-6 text-center">
     <div class="w-14 h-14 border-4 border-emerald-500/25 border-t-emerald-500 rounded-full animate-spin"></div>
-    <p class="text-gray-200 text-sm font-semibold">Fetching live prices…</p>
+    <p class="text-gray-200 text-sm font-semibold">Fetching live pricesâ€¦</p>
     <p class="text-gray-500 text-xs">This usually takes just a second</p>
   </div>
 </div>
@@ -821,8 +809,8 @@ NAV = """
 TEAM_SELECT_FIELDS = """
 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
   <div>
-    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Home Team 🏠</label>
-    <select name="home_team" required onchange="filterAway(this.value)" class="w-full bg-[#0e131b] border border-[#2a3441] text-gray-100 rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition">
+    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Home Team ðŸ </label>
+    <select name="home_team" required class="w-full bg-[#0e131b] border border-[#2a3441] text-gray-100 rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition">
       <option value="">Pick a home team</option>
       {% for team in home_teams %}
         <option value="{{ team }}" {% if team == home_team %}selected{% endif %}>{{ team }}</option>
@@ -830,8 +818,8 @@ TEAM_SELECT_FIELDS = """
     </select>
   </div>
   <div>
-    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Away Team ✈️</label>
-    <select id="away_sel" name="away_team" required class="w-full bg-[#0e131b] border border-[#2a3441] text-gray-100 rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition">
+    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Away Team âœˆï¸</label>
+    <select name="away_team" required class="w-full bg-[#0e131b] border border-[#2a3441] text-gray-100 rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition">
       <option value="">Pick an away team</option>
       {% for team in teams %}
         <option value="{{ team }}" {% if team == away_team %}selected{% endif %}>{{ team }}</option>
@@ -847,29 +835,13 @@ TEAM_SELECT_FIELDS = """
   <input type="text" name="custom_url" value="{{ custom_url or '' }}" placeholder="Paste a fixture link here instead"
     class="w-full bg-[#0e131b] border border-[#2a3441] text-gray-100 rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition">
 </div>
-
-<script>
-  const PLAYED = {{ played_map_json()|safe }};
-  function filterAway(home) {
-    const excluded = PLAYED[home] || [];
-    const sel = document.getElementById('away_sel');
-    [...sel.options].forEach(o => {
-      if (!o.value) return;
-      const hide = excluded.includes(o.value);
-      o.hidden = hide;
-      o.disabled = hide;
-      if (hide && o.selected) sel.value = '';
-    });
-  }
-  filterAway(document.querySelector('select[name=home_team]').value);
-</script>
 """
 
 PRICELIST_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Prices 📋</title>
+    <title>Prices ðŸ“‹</title>
     """ + BASE_STYLE + """
 </head>
 <body class="min-h-screen">
@@ -878,22 +850,22 @@ PRICELIST_TEMPLATE = """
     {{ currency_bar|safe }}
 
     <div class="max-w-3xl mx-auto px-4 py-6">
-        <h1 class="text-2xl font-bold text-white mb-6">Every Stand, One Glance 📋</h1>
+        <h1 class="text-2xl font-bold text-white mb-6">Every Stand, One Glance ðŸ“‹</h1>
 
         <form method="POST" class="card search-form p-5 sm:p-6 mb-6">
             """ + TEAM_SELECT_FIELDS + """
 
             <button type="submit" class="tap mt-5 w-full sm:w-auto bg-emerald-500 hover:bg-emerald-400 text-white font-semibold px-6 py-3.5 rounded-xl text-sm transition shadow-lg shadow-emerald-500/20">
-                Show Me the Prices →
+                Show Me the Prices â†’
             </button>
         </form>
 
         {% if error %}
-            <div class="bg-red-500/10 border border-red-500/30 text-red-300 text-sm px-4 py-3 rounded-xl mb-6">⚠️ {{ error }}</div>
+            <div class="bg-red-500/10 border border-red-500/30 text-red-300 text-sm px-4 py-3 rounded-xl mb-6">âš ï¸ {{ error }}</div>
         {% endif %}
 
         {% if fixture_url %}
-            <p class="text-xs text-gray-500 mb-4 break-all">🔗 {{ fixture_url }}</p>
+            <p class="text-xs text-gray-500 mb-4 break-all">ðŸ”— {{ fixture_url }}</p>
         {% endif %}
 
         {% if results %}
@@ -999,8 +971,9 @@ def set_cached_raw_prices(home_team, fixture_url, qty, seated_together, raw_pric
 
 def get_or_fetch_raw_prices(home_team, fixture_url, qty, seated_together, category_map):
     """
-    Check the session cache first. Only hits the live site on a genuinely
-    new query -- switching tabs afterward reuses this with zero network calls.
+    The core speed trick: check the session cache first. Only hits the
+    live site (one request per unique category ID) on a genuinely new
+    query -- switching tabs afterward reuses this with zero network calls.
     """
     cached = get_cached_raw_prices(home_team, fixture_url, qty, seated_together)
     if cached is not None:
@@ -1014,7 +987,8 @@ def get_or_fetch_raw_prices(home_team, fixture_url, qty, seated_together, catego
 def get_or_resolve_fixture(home_team, away_team, custom_url, league_key):
     """
     Same caching trick for the fixture URL itself (the '-v-' vs '-vs-'
-    connectivity check), so tab switches don't re-run the live HTTP check.
+    connectivity check). Without this, every tab switch would re-run that
+    live HTTP check even though the raw ticket prices were already cached.
     """
     url_suffix = LEAGUES[league_key]["url_suffix"]
     key = f"{league_key}|{home_team}|{away_team}|{custom_url}"
@@ -1029,8 +1003,7 @@ def get_or_resolve_fixture(home_team, away_team, custom_url, league_key):
 
 
 def get_league():
-    league = session.get("league", DEFAULT_LEAGUE)
-    return league if league in LEAGUES else DEFAULT_LEAGUE
+    return session.get("league", DEFAULT_LEAGUE)
 
 
 @app.route("/", methods=["GET"])
@@ -1040,15 +1013,17 @@ def home():
 
 @app.route("/reset", methods=["POST"])
 def reset():
-    """Clear the saved search and all cached price/fixture data."""
+    """Clear the saved search and all cached price/fixture data -- takes
+    you back to a fully blank state without needing to restart the server."""
     session.clear()
     return redirect(request.referrer or "/pricelist")
 
 
 @app.route("/set-league", methods=["POST"])
 def set_league():
-    """Switch between Premier League and Champions League. Clears the search
-    and caches, and resets the display currency to that league's base."""
+    """Switch between Premier League and La Liga. Clears the search and
+    caches (home/away teams, currency, etc. all differ per league), and
+    resets the display currency to that league's own base currency."""
     league = request.form.get("league", "").strip()
     if league in LEAGUES:
         session.clear()
@@ -1065,7 +1040,9 @@ def get_currency():
 @app.route("/set-currency", methods=["POST"])
 def set_currency():
     """Switch the display currency (league base currency / AED / SAR).
-    Never touches the network -- prices are already cached."""
+    This never touches the network -- prices are already cached, so it's
+    an instant local recalculation (base price x rate) on whichever tab
+    you're viewing."""
     league = get_league()
     valid_currencies = {LEAGUES[league]["base_currency"], "AED", "SAR"}
     currency = request.form.get("currency", "").strip().upper()
@@ -1131,14 +1108,14 @@ def pricelist():
 
 
 # ---------------------------------------------------------------------------
-# Base Price page — raw D/D+/C/B/A/A+/VIP prices, no rounding applied
+# Base Price page â€” raw D/D+/C/B/A/A+/VIP prices, no rounding applied
 # ---------------------------------------------------------------------------
 
 BASEPRICE_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Base Price 💰</title>
+    <title>Base Price ðŸ’°</title>
     """ + BASE_STYLE + """
 </head>
 <body class="min-h-screen">
@@ -1147,22 +1124,22 @@ BASEPRICE_TEMPLATE = """
     {{ currency_bar|safe }}
 
     <div class="max-w-3xl mx-auto px-4 py-6">
-        <h1 class="text-2xl font-bold text-white mb-6">Your Cost Prices 💰</h1>
+        <h1 class="text-2xl font-bold text-white mb-6">Your Cost Prices ðŸ’°</h1>
 
         <form method="POST" class="card search-form p-5 sm:p-6 mb-6">
             """ + TEAM_SELECT_FIELDS + """
 
             <button type="submit" class="tap mt-5 w-full sm:w-auto bg-emerald-500 hover:bg-emerald-400 text-white font-semibold px-6 py-3.5 rounded-xl text-sm transition shadow-lg shadow-emerald-500/20">
-                Get Base Prices →
+                Get Base Prices â†’
             </button>
         </form>
 
         {% if error %}
-            <div class="bg-red-500/10 border border-red-500/30 text-red-300 text-sm px-4 py-3 rounded-xl mb-6">⚠️ {{ error }}</div>
+            <div class="bg-red-500/10 border border-red-500/30 text-red-300 text-sm px-4 py-3 rounded-xl mb-6">âš ï¸ {{ error }}</div>
         {% endif %}
 
         {% if fixture_url %}
-            <p class="text-xs text-gray-500 mb-4 break-all">🔗 {{ fixture_url }}</p>
+            <p class="text-xs text-gray-500 mb-4 break-all">ðŸ”— {{ fixture_url }}</p>
         {% endif %}
 
         {% if results %}
@@ -1253,14 +1230,14 @@ def baseprice():
 
 
 # ---------------------------------------------------------------------------
-# Customer Message page — rendered as a WhatsApp-style chat bubble
+# Customer Message page â€” rendered as a WhatsApp-style chat bubble
 # ---------------------------------------------------------------------------
 
 MESSAGE_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Message 💬</title>
+    <title>Message ðŸ’¬</title>
     """ + BASE_STYLE + """
     <style>
         .wa-bg {
@@ -1299,18 +1276,18 @@ MESSAGE_TEMPLATE = """
     {{ currency_bar|safe }}
 
     <div class="max-w-3xl mx-auto px-4 py-6">
-        <h1 class="text-2xl font-bold text-white mb-6">Ready to Send 💬</h1>
+        <h1 class="text-2xl font-bold text-white mb-6">Ready to Send ðŸ’¬</h1>
 
         <form method="POST" class="card search-form p-5 sm:p-6 mb-6">
             """ + TEAM_SELECT_FIELDS + """
 
             <button type="submit" class="tap mt-5 w-full sm:w-auto bg-emerald-500 hover:bg-emerald-400 text-white font-semibold px-6 py-3.5 rounded-xl text-sm transition shadow-lg shadow-emerald-500/20">
-                Generate Message →
+                Generate Message â†’
             </button>
         </form>
 
         {% if error %}
-            <div class="bg-red-500/10 border border-red-500/30 text-red-300 text-sm px-4 py-3 rounded-xl mb-6">⚠️ {{ error }}</div>
+            <div class="bg-red-500/10 border border-red-500/30 text-red-300 text-sm px-4 py-3 rounded-xl mb-6">âš ï¸ {{ error }}</div>
         {% endif %}
 
         {% if message_text %}
@@ -1376,7 +1353,6 @@ MESSAGE_TEMPLATE = """
 </html>
 """
 
-
 @app.route("/message", methods=["GET", "POST"])
 def message():
     message_text = None
@@ -1418,8 +1394,9 @@ def message():
                 meta_cached = session.get("meta_fixture_url") == fixture_url and "meta_stadium" in session
                 cached_prices = get_cached_raw_prices(home_team, fixture_url, qty, seated_together)
 
-                # Run the meta fetch and price fetch at the same time when both
-                # need the network. Session reads/writes stay in this thread.
+                # Kick off whichever of (meta fetch, price fetch) actually
+                # needs the network AT THE SAME TIME, instead of one after
+                # the other -- session reads/writes stay in this thread.
                 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                     meta_future = None if meta_cached else executor.submit(fetch_meta_network, fixture_url)
                     prices_future = None if cached_prices is not None else executor.submit(
@@ -1450,7 +1427,7 @@ def message():
                 if match_date:
                     lines.append(match_date)
                 lines.append("")
-                lines.append("جميع الاسعار للشخص الواحد و اقصاها اثنين متجاورة")
+                lines.append("Ø¬Ù…ÙŠØ¹ Ø§Ù„Ø§Ø³Ø¹Ø§Ø± Ù„Ù„Ø´Ø®Øµ Ø§Ù„ÙˆØ§Ø­Ø¯ Ùˆ Ø§Ù‚ØµØ§Ù‡Ø§ Ø§Ø«Ù†ÙŠÙ† Ù…ØªØ¬Ø§ÙˆØ±Ø©")
                 lines.append("")
 
                 league_info = LEAGUES[league]
@@ -1474,9 +1451,9 @@ def message():
                         price_str = f"{converted:g} {display_currency}"
                     lines.append(f"{label} {price_str}")
                 lines.append("")
-                lines.append("جميع الاسعار قابلة للتغيير ب اي وقت")
+                lines.append("Ø¬Ù…ÙŠØ¹ Ø§Ù„Ø§Ø³Ø¹Ø§Ø± Ù‚Ø§Ø¨Ù„Ø© Ù„Ù„ØªØºÙŠÙŠØ± Ø¨ Ø§ÙŠ ÙˆÙ‚Øª")
                 lines.append("")
-                lines.append("التقسيط ب تابي للارقام الاماراتية")
+                lines.append("Ø§Ù„ØªÙ‚Ø³ÙŠØ· Ø¨ ØªØ§Ø¨ÙŠ Ù„Ù„Ø§Ø±Ù‚Ø§Ù… Ø§Ù„Ø§Ù…Ø§Ø±Ø§ØªÙŠØ©")
 
                 message_text = "\n".join(lines)
 
@@ -1506,5 +1483,6 @@ def message():
 
 if __name__ == "__main__":
     # host="0.0.0.0" makes this reachable from other devices on your WiFi
-    # (like your phone) at http://YOUR-COMPUTER-IP:5000.
+    # (like your phone) at http://YOUR-COMPUTER-IP:5000 -- see chat for how
+    # to find your computer's IP address.
     app.run(host="0.0.0.0", port=5000, debug=True)
