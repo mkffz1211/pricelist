@@ -22,15 +22,15 @@ import re
 import unicodedata
 import datetime
 import secrets
-import time
 import concurrent.futures
+import json
 
 app = Flask(__name__)
 # A NEW random secret key every time the server starts. Flask session cookies
 # are stored in your browser, not the server -- so without this, restarting
-# the app would still show your last search (e.g. "Arsenal vs Coventry")
-# because the browser's old cookie would still be valid. Generating a fresh
-# key each run invalidates any old cookie, so the app always starts blank.
+# the app would still show your last search because the browser's old cookie
+# would still be valid. Generating a fresh key each run invalidates any old
+# cookie, so the app always starts blank.
 app.secret_key = secrets.token_hex(32)
 
 HEADERS = {
@@ -77,33 +77,57 @@ HOME_TEAMS = [
     "Manchester City",
 ]
 
-LA_LIGA_HOME_TEAMS = [
+CHAMPIONS_LEAGUE_HOME_TEAMS = [
+    "Arsenal",
+    "Chelsea",
+    "Liverpool",
+    "Tottenham Hotspur",
+    "Manchester United",
+    "Manchester City",
     "Real Madrid",
-    "FC Barcelona",
 ]
 
-LA_LIGA_AWAY_TEAMS = [
-    "Alavés",
-    "Athletic Club",
-    "Atlético de Madrid",
-    "FC Barcelona",
-    "Celta Vigo",
-    "Deportivo La Coruña",
-    "Elche",
-    "Espanyol",
-    "Getafe",
-    "Levante",
-    "Málaga",
-    "Osasuna",
-    "Racing Santander",
-    "Rayo Vallecano",
-    "Real Betis",
+# Premier League clubs plus European opponents. Confirm this list against the
+# 2026-27 Champions League participants before using it.
+CHAMPIONS_LEAGUE_AWAY_TEAMS = TEAMS + [
+    "Borussia Dortmund",
     "Real Madrid",
-    "Real Sociedad",
-    "Sevilla",
-    "Valencia",
-    "Villarreal",
+    "FC Barcelona",
+    "Atlético de Madrid",
+    "Bayern Munich",
+    "Paris Saint-Germain",
+    "Inter Milan",
+    "Juventus",
+    "AC Milan",
+    "Napoli",
+    "Bayer Leverkusen",
+    "RB Leipzig",
+    "Benfica",
+    "Sporting CP",
+    "PSV",
+    "Porto",
+    "Club Brugge",
+    "Galatasaray",
+    "Monaco",
+    "Marseille",
 ]
+
+# Fixtures that have already been played. Each entry is (home, away).
+# Add more here when a match is over, and it disappears from the away dropdown.
+PLAYED_FIXTURES = {
+    ("Arsenal", "Coventry City"),
+}
+
+
+def played_map_json():
+    """Return {home_team: [away teams already played]} as JSON for the page script."""
+    m = {}
+    for home, away in PLAYED_FIXTURES:
+        m.setdefault(home, []).append(away)
+    return json.dumps(m)
+
+
+app.jinja_env.globals["played_map_json"] = played_map_json
 
 # Quantity and "seated together" are no longer user-editable -- every search
 # always uses these fixed values.
@@ -117,14 +141,16 @@ DEFAULT_SEATED_TOGETHER = True
 BASE_DOMAIN = "https://www.livefootballtickets.com/us/fixtures/"
 
 # Some team names don't slugify cleanly. Confirmed against the live site
-# where possible (Atlético de Madrid, Athletic Club, Levante); the rest of
-# the Spanish teams use best-effort accent-stripped slugs -- if any of
-# those turn out wrong, tell me the correct slug and I'll add it here.
+# where possible (Atlético de Madrid, Athletic Club, Levante); the rest use
+# best-effort accent-stripped slugs -- if any turn out wrong, send me the
+# correct slug and I'll add it here.
 SLUG_OVERRIDES = {
     "Brighton and Hove Albion": "brighton-hove-albion",
     "Atlético de Madrid": "atletico-madrid",
     "Athletic Club": "athletic-de-bilbao",
     "Levante": "levante-ud",
+    "Inter Milan": "inter-milan",
+    "Bayern Munich": "bayern-munich",
 }
 
 
@@ -151,9 +177,8 @@ def build_fixture_url_with_connector(home_team, away_team, connector, url_suffix
 
 def find_fixture_url(home_team, away_team, url_suffix):
     """
-    Check both '-v-' and '-vs-' fixture URLs IN PARALLEL (instead of trying
-    one, waiting, then trying the other) and return whichever works,
-    preferring '-v-' if both do. Returns None if neither resolves.
+    Check both '-v-' and '-vs-' fixture URLs IN PARALLEL and return whichever
+    works, preferring '-v-' if both do. Returns None if neither resolves.
     """
     candidates = {
         connector: build_fixture_url_with_connector(home_team, away_team, connector, url_suffix)
@@ -180,10 +205,7 @@ def find_fixture_url(home_team, away_team, url_suffix):
 # ---------------------------------------------------------------------------
 # League definitions -- the single source of truth for which home/away
 # teams show up, which URL suffix to use, and which currency is "base"
-# for that league (GBP for Premier League, EUR for La Liga). Note: the
-# site's currency dropdown is client-side only and doesn't change what our
-# scraper reads (verified), so "EUR" for La Liga means the same scraped
-# number, just labeled EUR instead of GBP -- see apply_currency_to_results.
+# for that league.
 # ---------------------------------------------------------------------------
 
 LEAGUES = {
@@ -196,117 +218,18 @@ LEAGUES = {
         "base_symbol": "£",
         "other_rate": 5,
     },
-    "la_liga": {
-        "label": "La Liga",
-        "home_teams": LA_LIGA_HOME_TEAMS,
-        "away_teams": LA_LIGA_AWAY_TEAMS,
-        "url_suffix": "spanish-la-liga",
-        "base_currency": "EUR",
-        "base_symbol": "€",
-        # AED/SAR = raw scraped GBP price x 5, THEN converted to EUR via
-        # the live rate. Since multiplication is commutative, that's
-        # mathematically identical to (GBP x live_rate) x 5 -- which is
-        # exactly what our code path already computes when other_rate=5.
+    "champions_league": {
+        "label": "Champions League",
+        "home_teams": CHAMPIONS_LEAGUE_HOME_TEAMS,
+        "away_teams": CHAMPIONS_LEAGUE_AWAY_TEAMS,
+        "url_suffix": "champions-league",
+        "base_currency": "GBP",
+        "base_symbol": "£",
         "other_rate": 5,
     },
 }
 
 DEFAULT_LEAGUE = "premier_league"
-
-# ---------------------------------------------------------------------------
-# Live GBP -> EUR exchange rate (for La Liga). The site's own currency
-# dropdown is client-side only (verified: ?currency=eur has no effect on
-# the server response), so every price we scrape is always in GBP
-# regardless of league. For La Liga, we convert that GBP price to a real
-# EUR amount ourselves using a live rate, instead of just relabeling the
-# GBP number as EUR.
-#
-# Source: Frankfurter API (api.frankfurter.dev) -- free, no API key,
-# tracks official European Central Bank reference rates.
-# ---------------------------------------------------------------------------
-
-GBP_EUR_FALLBACK_RATE = 1.17  # used only if the live rate fetch fails and we have no cached rate yet
-RATE_CACHE_TTL_SECONDS = 6 * 60 * 60  # refresh every 6 hours
-
-_gbp_eur_rate_cache = {"rate": None, "fetched_at": 0}
-
-
-def get_gbp_to_eur_rate():
-    """Return a live GBP->EUR rate, cached for a few hours. Falls back to
-    the last known good rate (or a hardcoded estimate) if the API is
-    unreachable, so a network hiccup here never breaks a search."""
-    now = time.time()
-    cached_rate = _gbp_eur_rate_cache["rate"]
-    if cached_rate is not None and (now - _gbp_eur_rate_cache["fetched_at"]) < RATE_CACHE_TTL_SECONDS:
-        return cached_rate
-
-    try:
-        resp = requests.get(
-            "https://api.frankfurter.dev/v1/latest?base=GBP&symbols=EUR",
-            timeout=8,
-        )
-        resp.raise_for_status()
-        rate = resp.json()["rates"]["EUR"]
-        _gbp_eur_rate_cache["rate"] = rate
-        _gbp_eur_rate_cache["fetched_at"] = now
-        return rate
-    except (requests.RequestException, KeyError, ValueError):
-        return cached_rate if cached_rate is not None else GBP_EUR_FALLBACK_RATE
-
-
-def convert_scraped_price_to_league_base(amount, league_key):
-    """The site always returns GBP. Convert that into the given league's
-    own base currency: unchanged for Premier League (GBP), or a real
-    live-rate conversion to EUR for La Liga."""
-    if amount is None:
-        return None
-    if league_key == "la_liga":
-        return amount * get_gbp_to_eur_rate()
-    return amount
-
-
-# ---------------------------------------------------------------------------
-# Live EUR -> AED / SAR rates (La Liga's AED and SAR prices). Frankfurter
-# (used above for GBP->EUR) is ECB-only and doesn't cover Gulf currencies,
-# so this uses a different free, no-key source that does: open.er-api.com.
-# Premier League keeps its flat x5 GBP->AED/SAR rule (unchanged) -- this
-# live-rate path is specifically for La Liga's EUR->AED/SAR conversion.
-# ---------------------------------------------------------------------------
-
-EUR_GULF_FALLBACK_RATES = {"AED": 4.2, "SAR": 4.28}  # used only if the live fetch fails and we have no cached rates yet
-
-_eur_gulf_rate_cache = {"rates": None, "fetched_at": 0}
-
-
-def get_eur_to_gulf_rates():
-    """Return live {'AED': rate, 'SAR': rate} from EUR, cached for a few
-    hours. Falls back to the last known good rates (or hardcoded
-    estimates) if the API is unreachable."""
-    now = time.time()
-    cached_rates = _eur_gulf_rate_cache["rates"]
-    if cached_rates is not None and (now - _eur_gulf_rate_cache["fetched_at"]) < RATE_CACHE_TTL_SECONDS:
-        return cached_rates
-
-    try:
-        resp = requests.get("https://open.er-api.com/v6/latest/EUR", timeout=8)
-        resp.raise_for_status()
-        data = resp.json()
-        rates = {"AED": data["rates"]["AED"], "SAR": data["rates"]["SAR"]}
-        _eur_gulf_rate_cache["rates"] = rates
-        _eur_gulf_rate_cache["fetched_at"] = now
-        return rates
-    except (requests.RequestException, KeyError, ValueError):
-        return cached_rates if cached_rates is not None else EUR_GULF_FALLBACK_RATES
-
-
-def get_other_currency_rate(league_key, currency):
-    """Resolve the multiplier for a non-base currency (AED/SAR).
-    La Liga uses live EUR->AED/SAR rates; Premier League keeps its flat
-    x5 GBP->AED/SAR rule."""
-    if league_key == "la_liga" and currency in ("AED", "SAR"):
-        rates = get_eur_to_gulf_rates()
-        return rates.get(currency, EUR_GULF_FALLBACK_RATES[currency])
-    return LEAGUES[league_key]["other_rate"]
 
 # ---------------------------------------------------------------------------
 # Category maps — ONE PER HOME TEAM (each stadium has different stand IDs)
@@ -607,17 +530,11 @@ def get_cheapest_price(base_url, qty, seated_together, category_ids):
 def fetch_raw_prices(fixture_url, qty, seated_together, category_map):
     """
     Fetch the price for every UNIQUE category ID referenced anywhere in a
-    team's category map -- exactly ONE network request per ID, regardless
-    of how many D/C/B/A labels or stand-list rows reuse that ID.
-
-    All requests fire IN PARALLEL (thread pool) instead of one-at-a-time,
-    since each category ID is an independent HTTP request -- this is the
-    main speed win for a search with 10+ stands.
+    team's category map -- one network request per ID, all in parallel.
 
     Returns {category_id: (amount, currency)}. This is the single source
-    of truth all three tabs (Full Price List, Base Price, Customer Message
-    Final) derive from -- see derive_* functions below, which are pure
-    local computation with zero network calls.
+    of truth all three tabs derive from -- see derive_* functions below,
+    which are pure local computation with zero network calls.
     """
     ids = set()
     for label, cat_ids, formula in category_map:
@@ -645,7 +562,7 @@ def fetch_raw_prices(fixture_url, qty, seated_together, category_map):
 
 def derive_price_list(raw_prices, category_map):
     """Given cached raw prices, resolve every D/C/B/A label to a final
-    price -- no network calls. Used by Base Price and Customer Message Final."""
+    price -- no network calls. Used by Base Price and Customer Message."""
     label_prices = {}
     for label, cat_ids, formula in category_map:
         if cat_ids is not None:
@@ -740,14 +657,15 @@ def fetch_meta_network(fixture_url):
     return stadium, match_date
 
 
-BASE_STYLE = r"""
+BASE_STYLE = """
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0b0f14">
+<script src="https://cdn.tailwindcss.com"></script>
 <style>
   :root { color-scheme: dark; }
-  * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+  * { -webkit-tap-highlight-color: transparent; }
   html, body { background: #0b0f14; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Arial, sans-serif;
@@ -755,7 +673,6 @@ BASE_STYLE = r"""
     padding-top: env(safe-area-inset-top);
     padding-bottom: env(safe-area-inset-bottom);
     -webkit-font-smoothing: antialiased;
-    margin: 0;
   }
   .card {
     background: #12171f;
@@ -764,7 +681,7 @@ BASE_STYLE = r"""
     box-shadow: 0 4px 24px rgba(0,0,0,0.35);
   }
   /* Inputs at 16px stop iOS Safari from auto-zooming in on focus */
-  input, select, textarea, button { font-size: 16px; font-family: inherit; }
+  input, select, textarea, button { font-size: 16px; }
   select {
     -webkit-appearance: none;
     appearance: none;
@@ -776,181 +693,10 @@ BASE_STYLE = r"""
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-thumb { background: #263040; border-radius: 8px; }
   ::selection { background: #10b98155; }
-  a { text-decoration: none; }
-  button { cursor: pointer; }
-
-  /* -----------------------------------------------------------------
-     Static utility stylesheet (hand-written, no JS compilation step)
-     Replaces the Tailwind CDN "Play" script, which recompiles every
-     class from scratch via JavaScript on EVERY page load -- that
-     runtime cost was the main source of the delay on simple button
-     clicks (league/currency/tab switches), since this app does a full
-     page reload for each of those. A plain <style> block like this
-     just gets parsed by the browser instantly, no JS execution needed.
-     Covers exactly the classes used across the app -- not a general
-     Tailwind replacement.
-     ----------------------------------------------------------------- */
-
   .tap { transition: transform 0.1s ease, opacity 0.1s ease; }
   .tap:active { transform: scale(0.96); opacity: 0.9; }
-
-  /* Layout */
-  .flex { display: flex; }
-  .flex-col { flex-direction: column; }
-  .flex-wrap { flex-wrap: wrap; }
-  .flex-1 { flex: 1 1 0%; }
-  .grid { display: grid; }
-  .grid-cols-1 { grid-template-columns: repeat(1, minmax(0, 1fr)); }
-  .grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .items-center { align-items: center; }
-  .justify-center { justify-content: center; }
-  .justify-end { justify-content: flex-end; }
-  .block { display: block; }
-  .hidden { display: none; }
-  .fixed { position: fixed; }
-  .inset-0 { top: 0; right: 0; bottom: 0; left: 0; }
-  .z-50 { z-index: 50; }
-  .overflow-hidden { overflow: hidden; }
-  .w-full { width: 100%; }
-  .w-10 { width: 2.5rem; }
-  .w-14 { width: 3.5rem; }
-  .h-10 { height: 2.5rem; }
-  .h-14 { height: 3.5rem; }
-  .min-h-screen { min-height: 100vh; }
-  .max-w-3xl { max-width: 48rem; }
-  .max-w-sm { max-width: 24rem; }
-  .max-w-\[90\%\] { max-width: 90%; }
-  .mx-auto { margin-left: auto; margin-right: auto; }
-  .ml-auto { margin-left: auto; }
-
-  /* Spacing */
-  .gap-1 { gap: 0.25rem; }
-  .gap-2 { gap: 0.5rem; }
-  .gap-3 { gap: 0.75rem; }
-  .gap-4 { gap: 1rem; }
-  .p-4 { padding: 1rem; }
-  .p-5 { padding: 1.25rem; }
-  .px-3 { padding-left: 0.75rem; padding-right: 0.75rem; }
-  .px-3\.5 { padding-left: 0.875rem; padding-right: 0.875rem; }
-  .px-4 { padding-left: 1rem; padding-right: 1rem; }
-  .px-5 { padding-left: 1.25rem; padding-right: 1.25rem; }
-  .px-6 { padding-left: 1.5rem; padding-right: 1.5rem; }
-  .py-1\.5 { padding-top: 0.375rem; padding-bottom: 0.375rem; }
-  .py-2 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
-  .py-2\.5 { padding-top: 0.625rem; padding-bottom: 0.625rem; }
-  .py-3 { padding-top: 0.75rem; padding-bottom: 0.75rem; }
-  .py-3\.5 { padding-top: 0.875rem; padding-bottom: 0.875rem; }
-  .py-6 { padding-top: 1.5rem; padding-bottom: 1.5rem; }
-  .pt-3 { padding-top: 0.75rem; }
-  .pt-5 { padding-top: 1.25rem; }
-  .mt-1 { margin-top: 0.25rem; }
-  .mt-3 { margin-top: 0.75rem; }
-  .mt-4 { margin-top: 1rem; }
-  .mt-5 { margin-top: 1.25rem; }
-  .mb-1\.5 { margin-bottom: 0.375rem; }
-  .mb-4 { margin-bottom: 1rem; }
-  .mb-6 { margin-bottom: 1.5rem; }
-  .mr-1 { margin-right: 0.25rem; }
-
-  /* Typography */
-  .text-2xl { font-size: 1.5rem; line-height: 2rem; }
-  .text-lg { font-size: 1.125rem; line-height: 1.75rem; }
-  .text-sm { font-size: 0.875rem; line-height: 1.25rem; }
-  .text-xs { font-size: 0.75rem; line-height: 1rem; }
-  .text-\[10px\] { font-size: 10px; }
-  .text-\[11px\] { font-size: 11px; }
-  .font-bold { font-weight: 700; }
-  .font-semibold { font-weight: 600; }
-  .font-medium { font-weight: 500; }
-  .font-normal { font-weight: 400; }
-  .text-center { text-align: center; }
-  .text-left { text-align: left; }
-  .text-right { text-align: right; }
-  .uppercase { text-transform: uppercase; }
-  .normal-case { text-transform: none; }
-  .tracking-wide { letter-spacing: 0.025em; }
-  .leading-relaxed { line-height: 1.625; }
-  .whitespace-pre-line { white-space: pre-line; }
-  .break-all { word-break: break-all; }
-
-  /* Text colors */
-  .text-white { color: #ffffff; }
-  .text-gray-50 { color: #f9fafb; }
-  .text-gray-100 { color: #f3f4f6; }
-  .text-gray-200 { color: #e5e7eb; }
-  .text-gray-400 { color: #9ca3af; }
-  .text-gray-500 { color: #6b7280; }
-  .text-emerald-400 { color: #34d399; }
-  .text-emerald-950 { color: #022c22; }
-  .text-red-300 { color: #fca5a5; }
-  .text-red-400 { color: #f87171; }
-
-  /* Background colors */
-  .bg-emerald-400 { background-color: #34d399; }
-  .bg-emerald-500 { background-color: #10b981; }
-  .bg-emerald-500\/10 { background-color: rgba(16,185,129,0.1); }
-  .bg-sky-500 { background-color: #0ea5e9; }
-  .bg-red-500\/10 { background-color: rgba(239,68,68,0.1); }
-  .bg-\[\#0b0f14\]\/80 { background-color: rgba(11,15,20,0.8); }
-  .bg-\[\#0e131b\] { background-color: #0e131b; }
-  .bg-\[\#12171f\] { background-color: #12171f; }
-  .bg-\[\#141a23\] { background-color: #141a23; }
-  .bg-\[\#161d27\] { background-color: #161d27; }
-  .bg-\[\#202c33\] { background-color: #202c33; }
-  .bg-\[\#2a3942\] { background-color: #2a3942; }
-
-  /* Borders */
-  .border { border-width: 1px; border-style: solid; }
-  .border-4 { border-width: 4px; border-style: solid; }
-  .border-\[\#1f2733\] { border-color: #1f2733; }
-  .border-\[\#232b38\] { border-color: #232b38; }
-  .border-\[\#2a3441\] { border-color: #2a3441; }
-  .border-emerald-500\/25 { border-color: rgba(16,185,129,0.25); }
-  .border-red-500\/30 { border-color: rgba(239,68,68,0.3); }
-  .border-t-emerald-500 { border-top-color: #10b981; }
-  .rounded-full { border-radius: 9999px; }
-  .rounded-xl { border-radius: 0.75rem; }
-  .rounded-2xl { border-radius: 1rem; }
-
-  /* Divide (border between children) */
-  .divide-y > :not([hidden]) ~ :not([hidden]) { border-top-width: 1px; border-top-style: solid; }
-  .divide-\[\#1f2733\] > :not([hidden]) ~ :not([hidden]) { border-color: #1f2733; }
-
-  /* Effects */
-  .shadow-lg.shadow-emerald-500\/25 { box-shadow: 0 10px 15px -3px rgba(16,185,129,0.25), 0 4px 6px -4px rgba(16,185,129,0.25); }
-  .shadow-md.shadow-emerald-500\/25 { box-shadow: 0 4px 6px -1px rgba(16,185,129,0.25), 0 2px 4px -2px rgba(16,185,129,0.25); }
-  .shadow-md.shadow-sky-500\/25 { box-shadow: 0 4px 6px -1px rgba(14,165,233,0.25), 0 2px 4px -2px rgba(14,165,233,0.25); }
-  .shadow-2xl.shadow-black\/40 { box-shadow: 0 25px 50px -12px rgba(0,0,0,0.4); }
-  .shadow-lg.shadow-emerald-500\/20 { box-shadow: 0 10px 15px -3px rgba(16,185,129,0.2), 0 4px 6px -4px rgba(16,185,129,0.2); }
-  .backdrop-blur-sm { backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
-  .transition { transition-property: color, background-color, border-color, box-shadow, transform, opacity; transition-duration: 0.15s; }
-  .opacity-60 { opacity: 0.6; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .animate-spin { animation: spin 1s linear infinite; }
-
-  /* Interactive states */
-  .hover\:bg-\[\#1a212c\]:hover { background-color: #1a212c; }
-  .hover\:bg-emerald-400:hover { background-color: #34d399; }
-  .hover\:bg-red-500\/20:hover { background-color: rgba(239,68,68,0.2); }
-  .hover\:text-gray-200:hover { color: #e5e7eb; }
-  .focus\:outline-none:focus { outline: none; }
-  .focus\:ring-2:focus { box-shadow: 0 0 0 2px #10b981; }
-  .focus\:ring-emerald-500:focus { box-shadow: 0 0 0 2px #10b981; }
-  .focus\:border-emerald-500:focus { border-color: #10b981; }
-
-  /* Responsive (matches Tailwind's default sm: breakpoint) */
-  @media (min-width: 640px) {
-    .sm\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .sm\:grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-    .sm\:p-6 { padding: 1.5rem; }
-    .sm\:w-auto { width: auto; }
-  }
 </style>
 """
-
-# AED/SAR are a straight multiplier on top of the league's own base
-# currency (GBP for Premier League, EUR for La Liga) -- see LEAGUES above
-# for the actual rate per league.
 
 NAV_ACTIVE = "bg-emerald-500 text-white shadow-md shadow-emerald-500/25"
 NAV_INACTIVE = "bg-[#141a23] text-gray-400 border border-[#232b38] hover:text-gray-200 hover:bg-[#1a212c]"
@@ -969,8 +715,8 @@ LEAGUE_BAR = """
       <button type="submit" class="{pl_active} tap w-full py-3.5 rounded-xl text-sm font-bold transition">🏴 Premier League</button>
     </form>
     <form method="POST" action="/set-league">
-      <input type="hidden" name="league" value="la_liga">
-      <button type="submit" class="{laliga_active} tap w-full py-3.5 rounded-xl text-sm font-bold transition">🇪🇸 La Liga</button>
+      <input type="hidden" name="league" value="champions_league">
+      <button type="submit" class="{cl_active} tap w-full py-3.5 rounded-xl text-sm font-bold transition">🏆 Champions League</button>
     </form>
   </div>
 </div>
@@ -981,7 +727,7 @@ def render_league_bar(selected_league):
     return (
         LEAGUE_BAR
         .replace("{pl_active}", LEAGUE_ACTIVE if selected_league == "premier_league" else LEAGUE_INACTIVE)
-        .replace("{laliga_active}", LEAGUE_ACTIVE if selected_league == "la_liga" else LEAGUE_INACTIVE)
+        .replace("{cl_active}", LEAGUE_ACTIVE if selected_league == "champions_league" else LEAGUE_INACTIVE)
     )
 
 
@@ -1019,20 +765,12 @@ def render_currency_bar(selected_currency, league_key):
 
 def apply_currency_to_results(results, currency, league_key):
     """Convert a list of {price, currency, ...} dicts in place to the
-    selected display currency. Used by Full Price List and Base Price,
-    which both share this shape. Prices are always scraped in GBP; this
-    first converts to the league's real base currency (live rate for
-    La Liga's EUR), then applies the AED/SAR rate on top if needed
-    (live EUR->AED/SAR for La Liga, flat x5 GBP->AED/SAR for Premier League)."""
+    selected display currency (league base price x rate)."""
     league = LEAGUES[league_key]
+    rate = 1 if currency == league["base_currency"] else league["other_rate"]
     for r in results:
         if r["price"] != "N/A":
-            base_amount = convert_scraped_price_to_league_base(r["price"], league_key)
-            if currency == league["base_currency"]:
-                r["price"] = round(base_amount, 2)
-            else:
-                rate = get_other_currency_rate(league_key, currency)
-                r["price"] = round(base_amount * rate, 2)
+            r["price"] = round(r["price"] * rate, 2)
         r["currency"] = currency
     return results
 
@@ -1084,7 +822,7 @@ TEAM_SELECT_FIELDS = """
 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
   <div>
     <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Home Team 🏠</label>
-    <select name="home_team" required class="w-full bg-[#0e131b] border border-[#2a3441] text-gray-100 rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition">
+    <select name="home_team" required onchange="filterAway(this.value)" class="w-full bg-[#0e131b] border border-[#2a3441] text-gray-100 rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition">
       <option value="">Pick a home team</option>
       {% for team in home_teams %}
         <option value="{{ team }}" {% if team == home_team %}selected{% endif %}>{{ team }}</option>
@@ -1093,7 +831,7 @@ TEAM_SELECT_FIELDS = """
   </div>
   <div>
     <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Away Team ✈️</label>
-    <select name="away_team" required class="w-full bg-[#0e131b] border border-[#2a3441] text-gray-100 rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition">
+    <select id="away_sel" name="away_team" required class="w-full bg-[#0e131b] border border-[#2a3441] text-gray-100 rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition">
       <option value="">Pick an away team</option>
       {% for team in teams %}
         <option value="{{ team }}" {% if team == away_team %}selected{% endif %}>{{ team }}</option>
@@ -1109,6 +847,22 @@ TEAM_SELECT_FIELDS = """
   <input type="text" name="custom_url" value="{{ custom_url or '' }}" placeholder="Paste a fixture link here instead"
     class="w-full bg-[#0e131b] border border-[#2a3441] text-gray-100 rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition">
 </div>
+
+<script>
+  const PLAYED = {{ played_map_json()|safe }};
+  function filterAway(home) {
+    const excluded = PLAYED[home] || [];
+    const sel = document.getElementById('away_sel');
+    [...sel.options].forEach(o => {
+      if (!o.value) return;
+      const hide = excluded.includes(o.value);
+      o.hidden = hide;
+      o.disabled = hide;
+      if (hide && o.selected) sel.value = '';
+    });
+  }
+  filterAway(document.querySelector('select[name=home_team]').value);
+</script>
 """
 
 PRICELIST_TEMPLATE = """
@@ -1245,9 +999,8 @@ def set_cached_raw_prices(home_team, fixture_url, qty, seated_together, raw_pric
 
 def get_or_fetch_raw_prices(home_team, fixture_url, qty, seated_together, category_map):
     """
-    The core speed trick: check the session cache first. Only hits the
-    live site (one request per unique category ID) on a genuinely new
-    query -- switching tabs afterward reuses this with zero network calls.
+    Check the session cache first. Only hits the live site on a genuinely
+    new query -- switching tabs afterward reuses this with zero network calls.
     """
     cached = get_cached_raw_prices(home_team, fixture_url, qty, seated_together)
     if cached is not None:
@@ -1261,8 +1014,7 @@ def get_or_fetch_raw_prices(home_team, fixture_url, qty, seated_together, catego
 def get_or_resolve_fixture(home_team, away_team, custom_url, league_key):
     """
     Same caching trick for the fixture URL itself (the '-v-' vs '-vs-'
-    connectivity check). Without this, every tab switch would re-run that
-    live HTTP check even though the raw ticket prices were already cached.
+    connectivity check), so tab switches don't re-run the live HTTP check.
     """
     url_suffix = LEAGUES[league_key]["url_suffix"]
     key = f"{league_key}|{home_team}|{away_team}|{custom_url}"
@@ -1277,7 +1029,8 @@ def get_or_resolve_fixture(home_team, away_team, custom_url, league_key):
 
 
 def get_league():
-    return session.get("league", DEFAULT_LEAGUE)
+    league = session.get("league", DEFAULT_LEAGUE)
+    return league if league in LEAGUES else DEFAULT_LEAGUE
 
 
 @app.route("/", methods=["GET"])
@@ -1287,17 +1040,15 @@ def home():
 
 @app.route("/reset", methods=["POST"])
 def reset():
-    """Clear the saved search and all cached price/fixture data -- takes
-    you back to a fully blank state without needing to restart the server."""
+    """Clear the saved search and all cached price/fixture data."""
     session.clear()
     return redirect(request.referrer or "/pricelist")
 
 
 @app.route("/set-league", methods=["POST"])
 def set_league():
-    """Switch between Premier League and La Liga. Clears the search and
-    caches (home/away teams, currency, etc. all differ per league), and
-    resets the display currency to that league's own base currency."""
+    """Switch between Premier League and Champions League. Clears the search
+    and caches, and resets the display currency to that league's base."""
     league = request.form.get("league", "").strip()
     if league in LEAGUES:
         session.clear()
@@ -1314,9 +1065,7 @@ def get_currency():
 @app.route("/set-currency", methods=["POST"])
 def set_currency():
     """Switch the display currency (league base currency / AED / SAR).
-    This never touches the network -- prices are already cached, so it's
-    an instant local recalculation (base price x rate) on whichever tab
-    you're viewing."""
+    Never touches the network -- prices are already cached."""
     league = get_league()
     valid_currencies = {LEAGUES[league]["base_currency"], "AED", "SAR"}
     currency = request.form.get("currency", "").strip().upper()
@@ -1627,6 +1376,7 @@ MESSAGE_TEMPLATE = """
 </html>
 """
 
+
 @app.route("/message", methods=["GET", "POST"])
 def message():
     message_text = None
@@ -1668,9 +1418,8 @@ def message():
                 meta_cached = session.get("meta_fixture_url") == fixture_url and "meta_stadium" in session
                 cached_prices = get_cached_raw_prices(home_team, fixture_url, qty, seated_together)
 
-                # Kick off whichever of (meta fetch, price fetch) actually
-                # needs the network AT THE SAME TIME, instead of one after
-                # the other -- session reads/writes stay in this thread.
+                # Run the meta fetch and price fetch at the same time when both
+                # need the network. Session reads/writes stay in this thread.
                 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                     meta_future = None if meta_cached else executor.submit(fetch_meta_network, fixture_url)
                     prices_future = None if cached_prices is not None else executor.submit(
@@ -1701,23 +1450,19 @@ def message():
                 if match_date:
                     lines.append(match_date)
                 lines.append("")
-                lines.append("الاسعار للشخص الواحد و اقصاها اثنين متجاورة")
+                lines.append("جميع الاسعار للشخص الواحد و اقصاها اثنين متجاورة")
                 lines.append("")
 
                 league_info = LEAGUES[league]
                 base_currency = league_info["base_currency"]
                 base_symbol = league_info["base_symbol"]
+                rate = 1 if display_currency == base_currency else league_info["other_rate"]
 
                 for label, amount, orig_currency in final:
                     if amount is not None:
-                        base_amount = convert_scraped_price_to_league_base(amount, league)
-                        marked_up = base_amount * 1.3
+                        marked_up = amount * 1.3
                         rounded = floor_round_5(marked_up)
-                        if display_currency == base_currency:
-                            converted = rounded
-                        else:
-                            rate = get_other_currency_rate(league, display_currency)
-                            converted = rounded * rate
+                        converted = rounded * rate
                     else:
                         converted = None
 
@@ -1729,13 +1474,9 @@ def message():
                         price_str = f"{converted:g} {display_currency}"
                     lines.append(f"{label} {price_str}")
                 lines.append("")
-                lines.append("⚠️ جميع الاسعار قابلة للتغير ب اي وقت")
-                lines.append("❌ التذاكر غير قابلة للاسترجاع")
-                lines.append("✉️ التذاكر توصل في يوم المباراة او قبلها")
+                lines.append("جميع الاسعار قابلة للتغيير ب اي وقت")
                 lines.append("")
-                lines.append("*متوفر تابي للارقام الاماراتية والسعودية 🇸🇦🇦🇪*")
-                lines.append("")
-                lines.append("Whatsapp: +971 50 363 8936")
+                lines.append("التقسيط ب تابي للارقام الاماراتية")
 
                 message_text = "\n".join(lines)
 
@@ -1765,6 +1506,5 @@ def message():
 
 if __name__ == "__main__":
     # host="0.0.0.0" makes this reachable from other devices on your WiFi
-    # (like your phone) at http://YOUR-COMPUTER-IP:5000 -- see chat for how
-    # to find your computer's IP address.
+    # (like your phone) at http://YOUR-COMPUTER-IP:5000.
     app.run(host="0.0.0.0", port=5000, debug=True)
