@@ -102,7 +102,7 @@ LEAGUES = {
         "label": "🏆 Champions League",
         "url_suffix": "champions-league",
         "team_page_base": "https://www.livefootballtickets.com/us/champions-league/",
-        "home_teams": HOME_TEAMS + ["Real Madrid"],
+        "home_teams": ["Arsenal", "Chelsea", "Liverpool", "Tottenham Hotspur", "Manchester United", "Manchester City", "Real Madrid"],
     },
 }
 DEFAULT_LEAGUE = "premier_league"
@@ -218,6 +218,38 @@ LIVESCORE_NAME_ALIASES = {
 _LIVESCORE_CACHE = {}
 _LIVESCORE_LOCK = threading.Lock()
 
+# Champions League 2026/27 league-phase HOME fixtures, from UEFA's published schedule.
+# Matchdays 3-6 are included. Matchday 7-8 (Jan 2027) and any playoff/knockout
+# games are not in this list yet. Add them here as they are published.
+CHAMPIONS_LEAGUE_HOME_FIXTURES = {
+    "Arsenal": [
+        (datetime.date(2026, 11, 24), "Borussia Dortmund"),
+        (datetime.date(2026, 12, 9), "Real Madrid"),
+    ],
+    "Liverpool": [
+        (datetime.date(2026, 10, 20), "Villarreal"),
+        (datetime.date(2026, 12, 9), "Porto"),
+        (datetime.date(2027, 1, 27), "Lens"),
+    ],
+    "Manchester City": [
+        (datetime.date(2026, 10, 20), "AEK Athens"),
+        (datetime.date(2026, 11, 24), "Napoli"),
+        (datetime.date(2027, 1, 27), "Sporting CP"),
+    ],
+    "Manchester United": [
+        (datetime.date(2026, 11, 3), "Roma"),
+        (datetime.date(2026, 12, 8), "Leipzig"),
+        (datetime.date(2027, 1, 20), "Bayern Munich"),
+    ],
+    "Real Madrid": [
+        (datetime.date(2026, 10, 21), "Leipzig"),
+        (datetime.date(2026, 11, 24), "PSV Eindhoven"),
+    ],
+    # Chelsea and Tottenham home fixtures not yet confirmed from source data.
+    "Chelsea": [],
+    "Tottenham Hotspur": [],
+}
+
 
 def _norm(name):
     return strip_accents(name or "").lower().replace(".", "").strip()
@@ -306,10 +338,13 @@ def away_teams_for(home_team):
         return []
     today = datetime.date.today()
     excluded = {away for h, away in PLAYED_FIXTURES if h == home_team}
-    try:
-        fixtures = fetch_livescore_fixtures(home_team)
-    except requests.RequestException:
-        return []
+    if get_league() == "champions_league":
+        fixtures = sorted(CHAMPIONS_LEAGUE_HOME_FIXTURES.get(home_team, []), key=lambda f: f[0])
+    else:
+        try:
+            fixtures = fetch_livescore_fixtures(home_team)
+        except requests.RequestException:
+            return []
     names = []
     for match_date, away in fixtures:
         if match_date < today or away in excluded or away in names:
