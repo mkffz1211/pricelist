@@ -77,7 +77,6 @@ HOME_TEAMS = [
     "Tottenham Hotspur",
     "Manchester United",
     "Manchester City",
-    "Real Madrid",
 ]
 
 # Fixtures that have already been played. Each entry is (home, away).
@@ -103,7 +102,7 @@ LEAGUES = {
         "label": "🏆 Champions League",
         "url_suffix": "champions-league",
         "team_page_base": "https://www.livefootballtickets.com/us/champions-league/",
-        "home_teams": ["Arsenal", "Chelsea", "Liverpool", "Tottenham Hotspur", "Manchester United", "Manchester City", "Real Madrid"],
+        "home_teams": ["Arsenal", "Chelsea", "Liverpool", "Tottenham Hotspur", "Manchester United", "Manchester City"],
     },
 }
 DEFAULT_LEAGUE = "premier_league"
@@ -123,7 +122,7 @@ app.jinja_env.globals["league_home_teams"] = lambda: HOME_TEAMS
 
 def is_cl_fixture(home_team, away_team):
     """True if this home/away pair is a Champions League fixture."""
-    return any(a == away_team for _, a in CHAMPIONS_LEAGUE_HOME_FIXTURES.get(home_team, []))
+    return any(a == away_team and c == "CL" for _, a, c in HOME_FIXTURES.get(home_team, []))
 
 # Some team names don't slugify cleanly.
 SLUG_OVERRIDES = {
@@ -288,11 +287,174 @@ PREMIER_LEAGUE_HOME_FIXTURES = {
         (datetime.date(2027, 5, 15), "Nottingham Forest"),
         (datetime.date(2027, 5, 30), "Brighton and Hove Albion"),
     ],
-    "Chelsea": [],
-    "Manchester United": [],
-    "Manchester City": [],
-    "Liverpool": [],
-    "Tottenham Hotspur": [],
+    "Chelsea": [
+        (datetime.date(2026, 11, 21), "Leeds United"),
+        (datetime.date(2026, 12, 2), "Crystal Palace"),
+    ],
+    "Manchester United": [
+        (datetime.date(2026, 11, 28), "Brentford"),
+        (datetime.date(2026, 12, 5), "Coventry City"),
+    ],
+    "Manchester City": [
+        (datetime.date(2026, 12, 2), "Leeds United"),
+    ],
+    "Liverpool": [
+        (datetime.date(2026, 11, 1), "Arsenal"),
+        (datetime.date(2026, 11, 22), "Manchester United"),
+        (datetime.date(2026, 12, 5), "Chelsea"),
+    ],
+    "Tottenham Hotspur": [
+        (datetime.date(2026, 11, 21), "Ipswich Town"),
+        (datetime.date(2026, 12, 3), "Fulham"),
+    ],
+}
+
+
+# All HOME fixtures per club: (date, away_team, competition). comp is "PL" or "CL".
+# Past dates are dropped automatically in away_teams_for().
+HOME_FIXTURES = {
+    "Arsenal": [
+        (datetime.date(2026, 8, 21), "Coventry City", "PL"),
+        (datetime.date(2026, 9, 5), "Chelsea", "PL"),
+        (datetime.date(2026, 10, 10), "Leeds United", "PL"),
+        (datetime.date(2026, 10, 13), "Lille", "CL"),
+        (datetime.date(2026, 10, 24), "Everton", "PL"),
+        (datetime.date(2026, 11, 7), "Hull City", "PL"),
+        (datetime.date(2026, 11, 24), "Borussia Dortmund", "CL"),
+        (datetime.date(2026, 11, 28), "Manchester City", "PL"),
+        (datetime.date(2026, 12, 9), "Real Madrid", "CL"),
+        (datetime.date(2026, 12, 12), "Bournemouth", "PL"),
+        (datetime.date(2026, 12, 19), "Manchester United", "PL"),
+        (datetime.date(2027, 1, 2), "Ipswich Town", "PL"),
+        (datetime.date(2027, 1, 6), "Brentford", "PL"),
+        (datetime.date(2027, 1, 23), "Newcastle United", "PL"),
+        (datetime.date(2027, 1, 27), "Sabah KF", "CL"),
+        (datetime.date(2027, 2, 6), "Liverpool", "PL"),
+        (datetime.date(2027, 2, 20), "Fulham", "PL"),
+        (datetime.date(2027, 3, 3), "Crystal Palace", "PL"),
+        (datetime.date(2027, 3, 20), "Sunderland", "PL"),
+        (datetime.date(2027, 4, 17), "Aston Villa", "PL"),
+        (datetime.date(2027, 5, 1), "Tottenham Hotspur", "PL"),
+        (datetime.date(2027, 5, 15), "Nottingham Forest", "PL"),
+        (datetime.date(2027, 5, 30), "Brighton and Hove Albion", "PL"),
+    ],
+    "Chelsea": [
+        (datetime.date(2026, 8, 29), "Brighton and Hove Albion", "PL"),
+        (datetime.date(2026, 9, 12), "Hull City", "PL"),
+        (datetime.date(2026, 10, 10), "Bournemouth", "PL"),
+        (datetime.date(2026, 10, 24), "Tottenham Hotspur", "PL"),
+        (datetime.date(2026, 10, 31), "Manchester United", "PL"),
+        (datetime.date(2026, 11, 21), "Leeds United", "PL"),
+        (datetime.date(2026, 12, 2), "Crystal Palace", "PL"),
+        (datetime.date(2026, 12, 5), "Liverpool", "PL"),
+        (datetime.date(2026, 12, 19), "Aston Villa", "PL"),
+        (datetime.date(2027, 1, 2), "Newcastle United", "PL"),
+        (datetime.date(2027, 1, 16), "Sunderland", "PL"),
+        (datetime.date(2027, 1, 30), "Nottingham Forest", "PL"),
+        (datetime.date(2027, 2, 20), "Ipswich Town", "PL"),
+        (datetime.date(2027, 3, 3), "Coventry City", "PL"),
+        (datetime.date(2027, 3, 13), "Arsenal", "PL"),
+        (datetime.date(2027, 4, 10), "Fulham", "PL"),
+        (datetime.date(2027, 4, 24), "Manchester City", "PL"),
+        (datetime.date(2027, 5, 15), "Everton", "PL"),
+        (datetime.date(2027, 5, 30), "Brentford", "PL"),
+    ],
+    "Tottenham Hotspur": [
+        (datetime.date(2026, 8, 29), "Newcastle United", "PL"),
+        (datetime.date(2026, 9, 12), "Everton", "PL"),
+        (datetime.date(2026, 9, 19), "Aston Villa", "PL"),
+        (datetime.date(2026, 10, 19), "Coventry City", "PL"),
+        (datetime.date(2026, 10, 31), "Crystal Palace", "PL"),
+        (datetime.date(2026, 11, 21), "Ipswich Town", "PL"),
+        (datetime.date(2026, 12, 2), "Fulham", "PL"),
+        (datetime.date(2026, 12, 5), "Arsenal", "PL"),
+        (datetime.date(2026, 12, 26), "Bournemouth", "PL"),
+        (datetime.date(2026, 12, 30), "Brighton and Hove Albion", "PL"),
+        (datetime.date(2027, 1, 16), "Leeds United", "PL"),
+        (datetime.date(2027, 1, 30), "Sunderland", "PL"),
+        (datetime.date(2027, 2, 10), "Manchester City", "PL"),
+        (datetime.date(2027, 2, 27), "Liverpool", "PL"),
+        (datetime.date(2027, 3, 13), "Nottingham Forest", "PL"),
+        (datetime.date(2027, 4, 10), "Brentford", "PL"),
+        (datetime.date(2027, 4, 24), "Hull City", "PL"),
+        (datetime.date(2027, 5, 8), "Chelsea", "PL"),
+        (datetime.date(2027, 5, 23), "Manchester United", "PL"),
+    ],
+    "Liverpool": [
+        (datetime.date(2026, 8, 29), "Nottingham Forest", "PL"),
+        (datetime.date(2026, 9, 9), "Atlético de Madrid", "CL"),
+        (datetime.date(2026, 9, 12), "Fulham", "PL"),
+        (datetime.date(2026, 10, 10), "Manchester City", "PL"),
+        (datetime.date(2026, 10, 20), "Villarreal", "CL"),
+        (datetime.date(2026, 10, 24), "Brighton and Hove Albion", "PL"),
+        (datetime.date(2026, 11, 1), "Arsenal", "PL"),
+        (datetime.date(2026, 11, 21), "Manchester United", "PL"),
+        (datetime.date(2026, 12, 2), "Sunderland", "PL"),
+        (datetime.date(2026, 12, 9), "FC Porto", "CL"),
+        (datetime.date(2026, 12, 12), "Leeds United", "PL"),
+        (datetime.date(2026, 12, 19), "Tottenham Hotspur", "PL"),
+        (datetime.date(2027, 1, 2), "Coventry City", "PL"),
+        (datetime.date(2027, 1, 16), "Crystal Palace", "PL"),
+        (datetime.date(2027, 1, 27), "RC Lens", "CL"),
+        (datetime.date(2027, 1, 30), "Everton", "PL"),
+        (datetime.date(2027, 2, 20), "Hull City", "PL"),
+        (datetime.date(2027, 3, 3), "Aston Villa", "PL"),
+        (datetime.date(2027, 3, 13), "Ipswich Town", "PL"),
+        (datetime.date(2027, 4, 10), "Newcastle United", "PL"),
+        (datetime.date(2027, 5, 1), "Chelsea", "PL"),
+        (datetime.date(2027, 5, 15), "Brentford", "PL"),
+        (datetime.date(2027, 5, 30), "Bournemouth", "PL"),
+    ],
+    "Manchester United": [
+        (datetime.date(2026, 8, 29), "Ipswich Town", "PL"),
+        (datetime.date(2026, 9, 10), "Sabah KF", "CL"),
+        (datetime.date(2026, 9, 12), "Manchester City", "PL"),
+        (datetime.date(2026, 10, 10), "Tottenham Hotspur", "PL"),
+        (datetime.date(2026, 10, 25), "Bournemouth", "PL"),
+        (datetime.date(2026, 11, 3), "AS Roma", "CL"),
+        (datetime.date(2026, 11, 8), "Aston Villa", "PL"),
+        (datetime.date(2026, 11, 28), "Brentford", "PL"),
+        (datetime.date(2026, 12, 5), "Coventry City", "PL"),
+        (datetime.date(2026, 12, 8), "RB Leipzig", "CL"),
+        (datetime.date(2026, 12, 27), "Nottingham Forest", "PL"),
+        (datetime.date(2026, 12, 30), "Sunderland", "PL"),
+        (datetime.date(2027, 1, 7), "Newcastle United", "PL"),
+        (datetime.date(2027, 1, 20), "Bayern Munich", "CL"),
+        (datetime.date(2027, 1, 23), "Liverpool", "PL"),
+        (datetime.date(2027, 2, 6), "Chelsea", "PL"),
+        (datetime.date(2027, 2, 10), "Brighton and Hove Albion", "PL"),
+        (datetime.date(2027, 2, 27), "Arsenal", "PL"),
+        (datetime.date(2027, 3, 13), "Everton", "PL"),
+        (datetime.date(2027, 4, 10), "Hull City", "PL"),
+        (datetime.date(2027, 4, 24), "Crystal Palace", "PL"),
+        (datetime.date(2027, 5, 15), "Leeds United", "PL"),
+        (datetime.date(2027, 5, 30), "Fulham", "PL"),
+    ],
+    "Manchester City": [
+        (datetime.date(2026, 8, 23), "Bournemouth", "PL"),
+        (datetime.date(2026, 9, 5), "Coventry City", "PL"),
+        (datetime.date(2026, 9, 19), "Sunderland", "PL"),
+        (datetime.date(2026, 10, 14), "Paris Saint-Germain", "CL"),
+        (datetime.date(2026, 10, 17), "Ipswich Town", "PL"),
+        (datetime.date(2026, 10, 20), "AEK Athens", "CL"),
+        (datetime.date(2026, 10, 31), "Brighton and Hove Albion", "PL"),
+        (datetime.date(2026, 11, 21), "Fulham", "PL"),
+        (datetime.date(2026, 11, 24), "Napoli", "CL"),
+        (datetime.date(2026, 12, 2), "Leeds United", "PL"),
+        (datetime.date(2026, 12, 12), "Chelsea", "PL"),
+        (datetime.date(2026, 12, 19), "Hull City", "PL"),
+        (datetime.date(2027, 1, 2), "Tottenham Hotspur", "PL"),
+        (datetime.date(2027, 1, 16), "Nottingham Forest", "PL"),
+        (datetime.date(2027, 1, 27), "Sporting CP", "CL"),
+        (datetime.date(2027, 1, 30), "Arsenal", "PL"),
+        (datetime.date(2027, 2, 20), "Newcastle United", "PL"),
+        (datetime.date(2027, 3, 3), "Everton", "PL"),
+        (datetime.date(2027, 3, 20), "Manchester United", "PL"),
+        (datetime.date(2027, 4, 17), "Crystal Palace", "PL"),
+        (datetime.date(2027, 5, 1), "Brentford", "PL"),
+        (datetime.date(2027, 5, 8), "Liverpool", "PL"),
+        (datetime.date(2027, 5, 23), "Aston Villa", "PL"),
+    ],
 }
 
 
@@ -390,8 +552,7 @@ def away_teams_for(home_team):
         print(f"[away list] LiveScore failed for {home_team}: {e}")
         AWAY_ERRORS[home_team] = f"Could not load LiveScore fixtures: {e}"
         fixtures = []
-    fixtures += PREMIER_LEAGUE_HOME_FIXTURES.get(home_team, [])
-    fixtures += CHAMPIONS_LEAGUE_HOME_FIXTURES.get(home_team, [])
+    fixtures += [(d, a) for d, a, _ in HOME_FIXTURES.get(home_team, [])]
     fixtures.sort(key=lambda f: (f[0] is None, f[0] or datetime.date.max))
     names = []
     for match_date, away in fixtures:
