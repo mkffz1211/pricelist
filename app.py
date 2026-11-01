@@ -267,6 +267,35 @@ CHAMPIONS_LEAGUE_HOME_FIXTURES = {
 }
 
 
+# Premier League 2026/27 HOME fixtures per club (dates from Arsenal's official list).
+# LiveScore often returns nothing, so these are used directly.
+# Add the other clubs' home fixtures here as they are confirmed.
+PREMIER_LEAGUE_HOME_FIXTURES = {
+    "Arsenal": [
+        (datetime.date(2026, 11, 7), "Hull City"),
+        (datetime.date(2026, 11, 28), "Manchester City"),
+        (datetime.date(2026, 12, 12), "Bournemouth"),
+        (datetime.date(2026, 12, 19), "Manchester United"),
+        (datetime.date(2027, 1, 2), "Ipswich Town"),
+        (datetime.date(2027, 1, 6), "Brentford"),
+        (datetime.date(2027, 1, 23), "Newcastle United"),
+        (datetime.date(2027, 2, 6), "Liverpool"),
+        (datetime.date(2027, 2, 20), "Fulham"),
+        (datetime.date(2027, 3, 3), "Crystal Palace"),
+        (datetime.date(2027, 3, 20), "Sunderland"),
+        (datetime.date(2027, 4, 17), "Aston Villa"),
+        (datetime.date(2027, 5, 1), "Tottenham Hotspur"),
+        (datetime.date(2027, 5, 15), "Nottingham Forest"),
+        (datetime.date(2027, 5, 30), "Brighton and Hove Albion"),
+    ],
+    "Chelsea": [],
+    "Manchester United": [],
+    "Manchester City": [],
+    "Liverpool": [],
+    "Tottenham Hotspur": [],
+}
+
+
 def _norm(name):
     return strip_accents(name or "").lower().replace(".", "").strip()
 
@@ -361,6 +390,7 @@ def away_teams_for(home_team):
         print(f"[away list] LiveScore failed for {home_team}: {e}")
         AWAY_ERRORS[home_team] = f"Could not load LiveScore fixtures: {e}"
         fixtures = []
+    fixtures += PREMIER_LEAGUE_HOME_FIXTURES.get(home_team, [])
     fixtures += CHAMPIONS_LEAGUE_HOME_FIXTURES.get(home_team, [])
     fixtures.sort(key=lambda f: (f[0] is None, f[0] or datetime.date.max))
     names = []
